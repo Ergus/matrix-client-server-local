@@ -17,6 +17,8 @@ impl<T> Matrix<T>
 where
     T: Clone + Default + std::fmt::Debug, Standard: Distribution<T>
 {
+    const BLOCKDIM: usize = 64;  // This si a simple empiric value, we may tune it.
+
     /// Constructor
     pub fn new(rows: usize, cols: usize) -> Self {
         let data = vec![T::default(); rows * cols];
@@ -251,23 +253,21 @@ where
         transposed
     }
 
-
-    pub fn transpose(&self, blocksize: usize) -> Matrix<T>
+    /// This is a simple heuristic, we may tune it 
+    fn is_small_enough(&self) -> bool
     {
-        let mut transposed = Matrix::<T>::new(self.cols, self.rows);
+        self.data.len() < Self::BLOCKDIM * Self::BLOCKDIM
+            || self.cols < Self::BLOCKDIM
+            || self.rows < Self::BLOCKDIM
+    }
 
-        let mut block = Matrix::<T>::new(blocksize, blocksize);
-
-        for row_block in (0..self.rows).step_by(blocksize) {
-            for col_block in (0..self.cols).step_by(blocksize) {
-
-                self.copy_to_block(&mut block, row_block, col_block);
-                block.transpose_small_square();
-                transposed.copy_from_block(&block, col_block, row_block);
-            }
+    pub fn transpose(&self) -> Matrix<T>
+    {
+        if self.is_small_enough() {
+            return self.transpose_small_rectangle()
         }
 
-        transposed
+        self.transpose_big(Self::BLOCKDIM)
     }
 
 
@@ -481,7 +481,6 @@ mod tests {
     {
         let mut matrix = Matrix::<f64>::random(512, 1024);
         assert!(matrix.validate());
-
 
         let transposed = matrix.transpose_big(64);
 

@@ -53,7 +53,7 @@ fn main() -> nix::Result<()> {
 
             print!("{}", matrix);
 
-            let transpose: Matrix::<f64> = matrix.transpose(64);
+            let transpose: Matrix::<f64> = matrix.transpose();
 
             // Write the result back into shared memory
             transpose.to_buffer(payload);

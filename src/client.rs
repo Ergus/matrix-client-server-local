@@ -165,7 +165,7 @@ fn main() -> nix::Result<()> {
         client.wait_response();
         let received = client.receive();
 
-        let transpose = tmp.expect("Error").transpose(16);
+        let transpose = tmp.expect("Error").transpose();
 
         assert_eq!(received, transpose);
 

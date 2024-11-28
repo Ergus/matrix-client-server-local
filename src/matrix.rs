@@ -63,6 +63,14 @@ where
         Self {rows, cols,  data}
     }
 
+
+    pub fn validate(&self) -> bool
+    {
+        self.rows > 16
+            && self.cols >= 16
+            && self.data.len() == self.rows * self.cols
+    }
+
     /// Very primitive serialization function
     pub fn to_buffer(&self, buffer: *mut c_void)
     {
@@ -119,21 +127,21 @@ where
     }
 
 
-    fn copy_to_buffer(&self, buffer: &mut Matrix<T>, row_block: usize, col_block: usize)
+    fn copy_to_block(&self, block: &mut Matrix<T>, row_block: usize, col_block: usize)
     {
-        assert_eq!(buffer.rows, buffer.cols, "buffer must be squared");
+        assert_eq!(block.rows, block.cols, "block must be squared");
 
-        let row_end: usize = (row_block + buffer.rows()).min(self.rows);
+        let row_end: usize = (row_block + block.rows()).min(self.rows);
 
-        let col_end: usize = (col_block + buffer.cols()).min(self.cols);
+        let col_end: usize = (col_block + block.cols()).min(self.cols);
         let copysize: usize = col_end - col_block;
 
         let src: *const T = self.data.as_ptr();
-        let dst: *mut T = buffer.data.as_mut_ptr();
+        let dst: *mut T = block.data.as_mut_ptr();
 
         let mut startdst: usize = 0;
 
-        // Copy from matrix to buffers
+        // Copy from matrix to blocks
         for row in row_block..row_end {
 
             unsafe {
@@ -144,27 +152,27 @@ where
                     copysize);
             }
 
-            startdst += buffer.cols();
+            startdst += block.cols();
         }
     }
 
-    fn copy_from_buffer(&mut self, buffer: &Matrix<T>, row_block: usize, col_block: usize)
+    fn copy_from_block(&mut self, block: &Matrix<T>, row_block: usize, col_block: usize)
     {
-        assert_eq!(buffer.rows, buffer.cols, "Buffer must be squared");
-        assert!(buffer.rows <= self.gcd(), "Buffer dim must be <= gcd");
-        assert!(self.gcd() % buffer.rows == 0  , "Buffer must be a divisor of gcd");
+        assert_eq!(block.rows, block.cols, "Block must be squared");
+        assert!(block.rows <= self.gcd(), "Block dim must be <= gcd");
+        assert!(self.gcd() % block.rows == 0  , "Block must be a divisor of gcd");
 
-        let row_end: usize = (row_block + buffer.rows()).min(self.rows);
+        let row_end: usize = (row_block + block.rows()).min(self.rows);
 
-        let col_end: usize = (col_block + buffer.cols()).min(self.cols);
+        let col_end: usize = (col_block + block.cols()).min(self.cols);
         let copysize: usize = col_end - col_block;
 
         let src: *mut T = self.data.as_mut_ptr();
-        let dst: *const T = buffer.data.as_ptr();
+        let dst: *const T = block.data.as_ptr();
 
         let mut startdst: usize = 0;
 
-        // Copy from matrix to buffers
+        // Copy from matrix to blocks
         for row in row_block..row_end {
 
             unsafe {
@@ -175,7 +183,7 @@ where
                     copysize);
             }
 
-            startdst += buffer.cols();
+            startdst += block.cols();
         }
     }
 
@@ -197,7 +205,8 @@ where
     /// Full transpose in place for small matrices (intended to happen in the cache)
     fn transpose_small_rectangle(&self) -> Matrix<T>
     {
-        assert_ne!(self.rows, self.cols, "Small rectangle tranpose must NOT be squared");
+        assert!(self.rows <= 64, "Small rectangle tranpose rows must not exceed 64");
+        assert!(self.cols <= 64, "Small rectangle tranpose rows must not exceed 64");
 
         let mut transpose = Matrix::<T>::new(self.cols, self.rows);
 
@@ -213,34 +222,55 @@ where
 
     // fn transpose_by_two_inplace(&mut self, row_block: usize, col_block: usize)
     // {
-    //     let mut buffer1 = Matrix::<T>::new(blocksize, blocksize);
-    //     let mut buffer2 = Matrix::<T>::new(blocksize, blocksize);
+    //     let mut block1 = Matrix::<T>::new(blocksize, blocksize);
+    //     let mut block2 = Matrix::<T>::new(blocksize, blocksize);
 
-    //     self.copy_to_buffer(&mut buffer1, row_block, col_block);
-    //     buffer1.transpose_small_square();
+    //     self.copy_to_block(&mut block1, row_block, col_block);
+    //     block1.transpose_small_square();
 
-    //     self.copy_to_buffer(&mut buffer2, col_block, row_block);
+    //     self.copy_to_block(&mut block2, col_block, row_block);
 
     // }
 
     // Transpose
-    pub fn transpose(&self, blocksize: usize) -> Matrix<T>
+    pub fn transpose_big(&self, blocksize: usize) -> Matrix<T>
     {
         let mut transposed = Matrix::<T>::new(self.cols, self.rows);
 
-        let mut buffer = Matrix::<T>::new(blocksize, blocksize);
+        let mut block = Matrix::<T>::new(blocksize, blocksize);
 
         for row_block in (0..self.rows).step_by(blocksize) {
             for col_block in (0..self.cols).step_by(blocksize) {
 
-                self.copy_to_buffer(&mut buffer, row_block, col_block);
-                buffer.transpose_small_square();
-                transposed.copy_from_buffer(&buffer, col_block, row_block);
+                self.copy_to_block(&mut block, row_block, col_block);
+                block.transpose_small_square();
+                transposed.copy_from_block(&block, col_block, row_block);
             }
         }
 
         transposed
     }
+
+
+    pub fn transpose(&self, blocksize: usize) -> Matrix<T>
+    {
+        let mut transposed = Matrix::<T>::new(self.cols, self.rows);
+
+        let mut block = Matrix::<T>::new(blocksize, blocksize);
+
+        for row_block in (0..self.rows).step_by(blocksize) {
+            for col_block in (0..self.cols).step_by(blocksize) {
+
+                self.copy_to_block(&mut block, row_block, col_block);
+                block.transpose_small_square();
+                transposed.copy_from_block(&block, col_block, row_block);
+            }
+        }
+
+        transposed
+    }
+
+
 }
 
 /// Immutable indexing
@@ -280,7 +310,8 @@ mod tests {
     use super::Matrix;
 
     #[test]
-    fn test_matrix_constructor() {
+    fn test_matrix_constructor()
+    {
         let matrix = Matrix::<i32>::new(3, 4);
 
         // Verify dimensions
@@ -296,7 +327,8 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_indexing() {
+    fn test_matrix_indexing()
+    {
         let mut matrix = Matrix::<i32>::new(2, 2);
 
         // Set values
@@ -313,7 +345,8 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_getters() {
+    fn test_matrix_getters()
+    {
         let mut matrix = Matrix::<i32>::new(3, 3);
 
         // Use `get_mut` to modify a value
@@ -328,7 +361,8 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_clone_and_eq() {
+    fn test_matrix_clone_and_eq()
+    {
         let matrix = Matrix::from_fn(2, 2, |i, j| i + j);
         let cloned_matrix = matrix.clone();
 
@@ -342,7 +376,8 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_debug() {
+    fn test_matrix_debug()
+    {
         let matrix = Matrix::from_fn(2, 2, |i, j| i * j);
 
         // Ensure debug string is as expected
@@ -353,7 +388,8 @@ mod tests {
 
 
     #[test]
-    fn test_matrix_transpose_small_square_inplace() {
+    fn test_matrix_transpose_small_square_inplace()
+    {
         let mut matrix = Matrix::from_fn(8, 8, |i, j| i * 8 + j);
 
         matrix.transpose_small_square();
@@ -367,7 +403,8 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_small_rectangle() {
+    fn test_matrix_transpose_small_rectangle()
+    {
         let matrix = Matrix::from_fn(16, 8, |i, j| i * 8 + j);
 
         let out = matrix.transpose_small_rectangle();
@@ -381,51 +418,55 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_copy_to_buffer() {
+    fn test_matrix_copy_to_block()
+    {
         let matrix = Matrix::from_fn(64, 64, |i, j| ((i / 8) * 8 + (j / 8)));
 
-        let mut buffer = Matrix::<usize>::new(8, 8);
+        let mut block = Matrix::<usize>::new(8, 8);
 
 
         for i in 0..8 {
             for j in 0..8 {
-                matrix.copy_to_buffer(&mut buffer, i * 8, j * 8);
-                assert!(buffer.data.iter().all(|&x| x == i * 8 + j));
+                matrix.copy_to_block(&mut block, i * 8, j * 8);
+                assert!(block.data.iter().all(|&x| x == i * 8 + j));
             }
         }
     }
 
 
     #[test]
-    fn test_matrix_from_buffer() {
+    fn test_matrix_from_block()
+    {
 
         let mut matrix = Matrix::<usize>::new(64, 64);
 
-        //let matrix = Matrix::from_fn(64, 64, |i, j| ((i / 8) * 8 + (j / 8)));
-
-
         for i in 0..8 {
             for j in 0..8 {
-                let buffer = Matrix::from_fn(8, 8, |_, _| (i * 8 + j));
-                matrix.copy_from_buffer(&buffer, i * 8, j * 8);
+                let block = Matrix::from_fn(8, 8, |_, _| (i * 8 + j));
+                matrix.copy_from_block(&block, i * 8, j * 8);
             }
         }
 
+        assert!(matrix.validate());
 
-        let mut buffer = Matrix::<usize>::new(8, 8);
+
+        let mut block = Matrix::<usize>::new(8, 8);
         for i in 0..8 {
             for j in 0..8 {
-                matrix.copy_to_buffer(&mut buffer, i * 8, j * 8);
-                assert!(buffer.data.iter().all(|&x| x == i * 8 + j));
+                matrix.copy_to_block(&mut block, i * 8, j * 8);
+                assert!(block.data.iter().all(|&x| x == i * 8 + j));
             }
         }
     }
 
     #[test]
-    fn test_matrix_transpose_big_squared() {
+    fn test_matrix_transpose_big_squared()
+    {
         let mut matrix = Matrix::from_fn(512, 512, |i, j| i * 512 + j);
+        assert!(matrix.validate());
 
-        let transposed = matrix.transpose(64);
+        let transposed = matrix.transpose_big(64);
+        assert!(transposed.validate());
 
         // Verify all elements
         for i in 0..512 {
@@ -436,10 +477,13 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_big_random() {
+    fn test_matrix_transpose_big_random()
+    {
         let mut matrix = Matrix::<f64>::random(512, 1024);
+        assert!(matrix.validate());
 
-        let transposed = matrix.transpose(64);
+
+        let transposed = matrix.transpose_big(64);
 
         // Verify all elements
         for i in 0..512 {
@@ -451,10 +495,13 @@ mod tests {
 
 
     #[test]
-    fn test_matrix_transpose_big_rectangular() {
+    fn test_matrix_transpose_big_rectangular()
+    {
         let mut matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
+        assert!(matrix.validate());
 
-        let transposed = matrix.transpose(64);
+        let transposed = matrix.transpose_big(64);
+        assert!(transposed.validate());
 
         // Verify all elements
         for i in 0..512 {

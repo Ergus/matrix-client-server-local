@@ -1,6 +1,9 @@
 use std::ops::{Index, IndexMut};
 use std::{ptr, fmt, cmp};
+use rand::Rng;
 
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Matrix<T> {
@@ -11,7 +14,7 @@ pub struct Matrix<T> {
 
 impl<T> Matrix<T>
 where
-    T: Clone + Default,
+    T: Clone + Default, Standard: Distribution<T>
 {
     /// Constructor
     pub fn new(rows: usize, cols: usize) -> Self {
@@ -33,22 +36,18 @@ where
         Self { rows, cols, data }
     }
 
+    /// Useful for the tests bellow
+    pub fn random(rows: usize, cols: usize) -> Self
+    {
+        let mut rng = rand::thread_rng();
+        let data: Vec<T> = (0..rows * cols).map(|_| rng.gen()).collect();
+        Self { rows, cols,  data}
+    }
+
     /// Get Rows
     pub fn rows(&self) -> usize {
         self.rows
     }
-
-    // fn gcd(&self) -> usize {
-    //     let mut a: usize = self.rows;
-    //     let mut b: usize = self.cols;
-
-    //     while b != 0 {
-    //         let temp = b;
-    //         b = a % b;
-    //         a = temp;
-    //     }
-    //     a
-    // }
 
     /// gcd is the min because we assume 2^n x 2^m matrices
     fn gcd(&self) -> usize {
@@ -154,6 +153,19 @@ where
             }
         }
     }
+
+
+    // fn transpose_by_two_inplace(&mut self, row_block: usize, col_block: usize)
+    // {
+    //     let mut buffer1 = Matrix::<T>::new(blocksize, blocksize);
+    //     let mut buffer2 = Matrix::<T>::new(blocksize, blocksize);
+
+    //     self.copy_to_buffer(&mut buffer1, row_block, col_block);
+    //     buffer1.transpose_small_square();
+
+    //     self.copy_to_buffer(&mut buffer2, col_block, row_block);
+
+    // }
 
     // Transpose
     pub fn transpose(&mut self, blocksize: usize) -> Matrix<T>
@@ -352,6 +364,21 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_matrix_transpose_big_random() {
+        let mut matrix = Matrix::<f64>::random(512, 1024);
+
+        let transposed = matrix.transpose(64);
+
+        // Verify all elements
+        for i in 0..512 {
+            for j in 0..1024 {
+                assert_eq!(matrix[(i, j)], transposed[(j, i)]);
+            }
+        }
+    }
+
 
     #[test]
     fn test_matrix_transpose_big_rectangular() {

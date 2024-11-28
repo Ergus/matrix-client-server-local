@@ -4,6 +4,8 @@ use rand::Rng;
 
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::ffi::c_void;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Matrix<T> {
@@ -44,6 +46,40 @@ where
         Self { rows, cols,  data}
     }
 
+    pub fn from_buffer(buffer: *const c_void) -> Self
+    {
+        let rows: usize = unsafe { &*(buffer as *const AtomicUsize) }.load(Ordering::SeqCst);
+        let cols: usize = unsafe { &*(buffer.add(8) as *const AtomicUsize) }.load(Ordering::SeqCst);
+
+        let mut data = vec![T::default(); rows * cols];
+
+        unsafe {
+            ptr::copy_nonoverlapping(
+                buffer.add(8),
+                data.as_mut_ptr() as *mut c_void,
+                rows * cols
+            );
+        }
+
+        Self {rows, cols,  data}
+    }
+
+    /// Very primitive serialization function
+    pub fn to_buffer(&self, buffer: *mut c_void)
+    {
+        unsafe {
+
+            *(buffer as *mut usize) = self.rows;
+            *(buffer.add(size_of::<usize>()) as *mut usize) = self.cols;
+
+            ptr::copy_nonoverlapping(
+                self.data.as_ptr() as *const c_void,
+                buffer.add(2 * size_of::<usize>()),
+                self.rows * self.cols
+            );
+        }
+    }
+
     /// Get Rows
     pub fn rows(&self) -> usize {
         self.rows
@@ -76,6 +112,11 @@ where
         } else {
             None
         }
+    }
+
+    /// Get Ref
+    pub fn data(&self) -> &Vec<T> {
+        &self.data
     }
 
 

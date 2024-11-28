@@ -1,7 +1,21 @@
 [package]
-name = "rust-irreducible"
+name = "irreducible"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 rand = "0.8"
+nix = "0.24"
+
+[lib]
+name = "matrix"
+path = "src/matrix.rs"
+
+
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"

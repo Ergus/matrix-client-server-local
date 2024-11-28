@@ -150,8 +150,9 @@ fn main() -> nix::Result<()> {
         }
 
         debug_assert_eq!(received, transpose, "Received matrix is not the transpose");
-
     }
+
+    client.send(&Matrix::<f64>::new(0, 0));
 
     Ok(())
 }

@@ -69,6 +69,8 @@ fn main() -> nix::Result<()> {
         }
     }
 
+    println!("Server exiting...");
+
     // Clean up resources
     unsafe {
         munmap(ptr as *mut _, SHM_SIZE)?;

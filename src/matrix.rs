@@ -4,7 +4,6 @@ use rand::Rng;
 
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ffi::c_void;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,15 +47,17 @@ where
 
     pub fn from_buffer(buffer: *const c_void) -> Self
     {
-        let rows: usize = unsafe { &*(buffer as *const AtomicUsize) }.load(Ordering::SeqCst);
-        let cols: usize = unsafe { &*(buffer.add(8) as *const AtomicUsize) }.load(Ordering::SeqCst);
+        let rows: usize = unsafe { *(buffer as *const usize) };
+        let cols: usize = unsafe { *(buffer.add(8) as *const usize) };
+
+        println!("HEE {} {}", rows, cols);
 
         let mut data = vec![T::default(); rows * cols];
 
         unsafe {
             ptr::copy_nonoverlapping(
-                buffer.add(8),
-                data.as_mut_ptr() as *mut c_void,
+                buffer.add(16) as *const T,
+                data.as_mut_ptr(),
                 rows * cols
             );
         }
@@ -73,8 +74,8 @@ where
             *(buffer.add(size_of::<usize>()) as *mut usize) = self.cols;
 
             ptr::copy_nonoverlapping(
-                self.data.as_ptr() as *const c_void,
-                buffer.add(2 * size_of::<usize>()),
+                self.data.as_ptr(),
+                buffer.add(2 * size_of::<usize>()) as *mut T,
                 self.rows * self.cols
             );
         }
@@ -209,7 +210,7 @@ where
     // }
 
     // Transpose
-    pub fn transpose(&mut self, blocksize: usize) -> Matrix<T>
+    pub fn transpose(&self, blocksize: usize) -> Matrix<T>
     {
         let mut transposed = Matrix::<T>::new(self.cols, self.rows);
 

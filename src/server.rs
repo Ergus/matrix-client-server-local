@@ -31,9 +31,7 @@ fn main() -> nix::Result<()> {
 
     // Initialize shared memory
     let ready_flag = unsafe { &*(ptr as *mut AtomicBool) };
-    let rows_a: &AtomicUsize = unsafe { &*(ptr.add(8) as *mut AtomicUsize) };
-    let cols_a: &AtomicUsize = unsafe { &*(ptr.add(16) as *mut AtomicUsize) };
-    let payload: *mut c_void = unsafe { ptr.add(24) as *mut c_void };
+    let payload: *mut c_void = unsafe { ptr.add(8) as *mut c_void };
 
     // Clear the ready flag
     ready_flag.store(false, Ordering::SeqCst);
@@ -44,17 +42,19 @@ fn main() -> nix::Result<()> {
         // Poll the ready flag
         if ready_flag.load(Ordering::SeqCst) {
 
+            let rows_a: &AtomicUsize = unsafe { &*(ptr.add(8) as *mut AtomicUsize) };
             let rows = rows_a.load(Ordering::SeqCst);
-            let cols = cols_a.load(Ordering::SeqCst);
 
             // This is not save but useful for testing
-            if rows == 0 || cols == 0 {
+            if rows == 0 {
                 break;
             }
 
-            let mut matrix = Matrix::<f64>::from_buffer(payload);
+            let matrix = Matrix::<f64>::from_buffer(payload);
 
-            let transpose = matrix.transpose(64);
+             print!("{}", matrix);
+
+            let transpose = matrix.transpose(4);
 
             // Write the result back into shared memory
             transpose.to_buffer(payload);

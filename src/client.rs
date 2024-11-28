@@ -46,6 +46,7 @@ impl Client<'_> {
     pub fn send(&self, matrix: &Matrix<f64>)
     {
         matrix.to_buffer(self.payload);
+        self.ready_flag.store(true, Ordering::SeqCst);
     }
 
     pub fn wait_response(&self)
@@ -55,9 +56,11 @@ impl Client<'_> {
         }
     }
 
-    pub fn read<T>(&mut self) -> Matrix<f64>
+    pub fn receive(&mut self) -> Matrix<f64>
     {
-        Matrix::<f64>::from_buffer(self.payload)
+        let tmp = Matrix::<f64>::from_buffer(self.payload);
+        self.ready_flag.store(true, Ordering::SeqCst);
+        tmp
     }
 
 }
@@ -150,7 +153,7 @@ fn main() -> nix::Result<()> {
     let mut rng = rand::thread_rng();
 
 
-    let client = Client::new();
+    let mut client = Client::new();
 
 
     for _ in 0..n_requests {
@@ -158,6 +161,15 @@ fn main() -> nix::Result<()> {
         let tmp = data.choose(&mut rng);
 
         client.send(tmp.unwrap());
+
+        client.wait_response();
+        let received = client.receive();
+
+        let transpose = tmp.expect("Error").transpose(16);
+
+        assert_eq!(received, transpose);
+
+        //print!("{}", matrix);
 
     }
 

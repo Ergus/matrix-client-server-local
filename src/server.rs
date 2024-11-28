@@ -4,7 +4,6 @@ use nix::unistd::ftruncate;
 use std::os::unix::io::RawFd;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::{thread, time::Duration};
 use std::ffi::c_void;
 
 use matrix::Matrix;
@@ -54,7 +53,7 @@ fn main() -> nix::Result<()> {
 
              print!("{}", matrix);
 
-            let transpose = matrix.transpose(4);
+            let transpose: Matrix::<f64> = matrix.transpose(64);
 
             // Write the result back into shared memory
             transpose.to_buffer(payload);
@@ -63,7 +62,7 @@ fn main() -> nix::Result<()> {
             ready_flag.store(false, Ordering::SeqCst);
         } else {
             // Avoid busy-waiting
-            thread::sleep(Duration::from_millis(10));
+            std::thread::yield_now();
         }
     }
 

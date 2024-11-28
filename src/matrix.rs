@@ -15,7 +15,7 @@ pub struct Matrix<T> {
 
 impl<T> Matrix<T>
 where
-    T: Clone + Default, Standard: Distribution<T>
+    T: Clone + Default + std::fmt::Debug, Standard: Distribution<T>
 {
     /// Constructor
     pub fn new(rows: usize, cols: usize) -> Self {
@@ -49,8 +49,6 @@ where
     {
         let rows: usize = unsafe { *(buffer as *const usize) };
         let cols: usize = unsafe { *(buffer.add(8) as *const usize) };
-
-        println!("HEE {} {}", rows, cols);
 
         let mut data = vec![T::default(); rows * cols];
 
@@ -196,6 +194,22 @@ where
         }
     }
 
+    /// Full transpose in place for small matrices (intended to happen in the cache)
+    fn transpose_small_rectangle(&self) -> Matrix<T>
+    {
+        assert_ne!(self.rows, self.cols, "Small rectangle tranpose must NOT be squared");
+
+        let mut transpose = Matrix::<T>::new(self.cols, self.rows);
+
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                transpose[(col, row)] = self[(row, col)].clone();
+            }
+        }
+
+        transpose
+    }
+
 
     // fn transpose_by_two_inplace(&mut self, row_block: usize, col_block: usize)
     // {
@@ -251,7 +265,7 @@ impl<T> IndexMut<(usize, usize)> for Matrix<T> {
 impl<T: std::fmt::Debug> fmt::Display for Matrix<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for i in 0..self.rows {
-            let slice = &self.data[i * self.rows.. (i + 1) * self.rows];
+            let slice = &self.data[i * self.cols.. (i + 1) * self.cols];
 
             write!(f, "{:?}\n", slice)?;  // Format each row and move to the next line
         }
@@ -339,7 +353,7 @@ mod tests {
 
 
     #[test]
-    fn test_matrix_transpose_small() {
+    fn test_matrix_transpose_small_square_inplace() {
         let mut matrix = Matrix::from_fn(8, 8, |i, j| i * 8 + j);
 
         matrix.transpose_small_square();
@@ -348,6 +362,20 @@ mod tests {
         for i in 0..8 {
             for j in 0..8 {
                 assert_eq!(matrix[(i, j)], i + j * 8);
+            }
+        }
+    }
+
+    #[test]
+    fn test_matrix_transpose_small_rectangle() {
+        let matrix = Matrix::from_fn(16, 8, |i, j| i * 8 + j);
+
+        let out = matrix.transpose_small_rectangle();
+
+        // Verify all elements
+        for i in 0..16 {
+            for j in 0..8 {
+                assert_eq!(out[(j, i)], matrix[(i, j)]);
             }
         }
     }

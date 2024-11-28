@@ -51,7 +51,10 @@ fn main() -> nix::Result<()> {
 
             let matrix = Matrix::<f64>::from_buffer(payload);
 
+            println!("Received:");
             print!("{}", matrix);
+
+            println!("\n");
 
             let transpose: Matrix::<f64> = matrix.transpose();
 

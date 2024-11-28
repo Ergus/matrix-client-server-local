@@ -58,9 +58,7 @@ impl Client<'_> {
 
     pub fn receive(&mut self) -> Matrix<f64>
     {
-        let tmp = Matrix::<f64>::from_buffer(self.payload);
-        self.ready_flag.store(true, Ordering::SeqCst);
-        tmp
+        Matrix::<f64>::from_buffer(self.payload)
     }
 
 }
@@ -73,47 +71,6 @@ impl Drop for Client<'_> {
         close(self.shm_fd).unwrap();
     }
 }
-
-// fn client_init()  {
-//     // Open shared memory
-
-//     // Access shared memory
-//     let n_ptr = unsafe { &*(ptr.add(N_OFFSET) as *mut AtomicUsize) };
-//     let array_ptr = unsafe { ptr.add(ARRAY_OFFSET) as *mut f64 };
-
-//     // Prepare request
-//     let data = vec![1.1, 2.2, 3.3, 4.4, 5.5];
-//     let n = data.len();
-
-//     // Write the number of elements and the array to shared memory
-//     n_ptr.store(n, Ordering::SeqCst);
-
-//     unsafe {
-//         for (i, &value) in data.iter().enumerate() {
-//             *array_ptr.add(i) = value;
-//         }
-//     }
-
-//     // Signal the server
-//     ready_flag.store(true, Ordering::SeqCst);
-
-//     // Wait for the server to clear the flag
-//     while ready_flag.load(Ordering::SeqCst) {
-//         std::thread::yield_now();
-//     }
-
-//     // Read the response
-//     let result = unsafe { *array_ptr };
-//     println!("Client received sum: {}", result);
-
-//     // Clean up resources
-//     unsafe {
-//         munmap(ptr, SHM_SIZE)?;
-//     }
-//     close(shm_fd)?;
-
-// }
-
 
 fn main() -> nix::Result<()> {
 
@@ -160,6 +117,9 @@ fn main() -> nix::Result<()> {
 
         let tmp = data.choose(&mut rng);
 
+        // println!("Sent:");
+        // print!("{}", tmp.unwrap());
+
         client.send(tmp.unwrap());
 
         client.wait_response();
@@ -167,15 +127,31 @@ fn main() -> nix::Result<()> {
 
         let transpose = tmp.expect("Error").transpose();
 
-        assert_eq!(received, transpose);
+        println!("Received:");
+        print!("{}", received);
 
-        //print!("{}", matrix);
+        println!("transpose:");
+        print!("{}", transpose);
+
+        println!("\n");
+
+        if received != transpose {
+            let diff: Vec<_> = received.data().into_iter().zip(transpose.data()).map(|(a, b)| a - b).collect();
+
+            for i in 0..rows {
+                for j in 0..cols {
+                    if diff[i * cols + j] != 0. {
+                        println!("i={} j={} rec={} exp={} diff={}",
+                            i, j, received[(i,j)], transpose[(i,j)], diff[i * cols + j]
+                        );
+                    }
+                }
+            }
+        }
+
+        debug_assert_eq!(received, transpose, "Received matrix is not the transpose");
 
     }
-
-
-
-
 
     Ok(())
 }

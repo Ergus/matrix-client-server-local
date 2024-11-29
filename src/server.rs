@@ -6,7 +6,6 @@ fn main() -> nix::Result<()> {
     let mut server = Server::new();
 
     loop {
-
         match server.wait_client() {
             Ok((client_fd, id, payload_size)) => {
 

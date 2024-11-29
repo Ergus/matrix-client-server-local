@@ -128,6 +128,11 @@ where
         &self.data
     }
 
+    pub fn payload_size(&self) -> usize
+    {
+        2 * size_of::<usize>() + self.rows * self.cols * size_of::<f64>()
+    }
+
 
     fn copy_to_block(&self, block: &mut Matrix<T>, row_block: usize, col_block: usize)
     {

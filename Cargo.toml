@@ -8,9 +8,8 @@ rand = "0.8"
 nix = "0.24"
 
 [lib]
-name = "matrix"
-path = "src/matrix.rs"
-
+name = "irreductible"
+path = "src/lib.rs"
 
 [[bin]]
 name = "server"

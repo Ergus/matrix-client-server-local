@@ -53,23 +53,27 @@ impl Server {
             // Poll the ready flag
             shared_buffer.wait_response();
 
+            let mut __guard_total = stats::TimeGuard::new("Total");
+
             let matrix = {
-                let __guard = stats::TimeGuard::new("CopyIn");
-                Matrix::<f64>::from_buffer(shared_buffer.payload)
+                let mut __guard = stats::TimeGuard::new("CopyIn");
+                let matrix = Matrix::<f64>::from_buffer(shared_buffer.payload);
+
+                // When we receive an empty matrix, then we break this thread and exit.
+                if matrix.data().len() == 0 {
+                    __guard_total.disable();
+                    __guard.disable();
+                    break;
+                }
+
+                matrix
             };
 
-            // This is not save but useful for testing
-            // When we receive an empty matrix, then we break this thread and exit.
-            if matrix.data().len() == 0 {
-                break;
-            }
-
-            // TODO: Add debug prints
-            // println!("Received:");
-            // print!("{}", matrix);
 
             let transpose: Matrix::<f64> = {
-                let __guard = stats::TimeGuard::new("Transpose");
+                let __guard = stats::TimeGuard::new(
+                    format!("Transpose_{}x{}", matrix.rows(), matrix.cols()).as_str()
+                );
                 matrix.transpose()
             };
 
@@ -80,8 +84,6 @@ impl Server {
                 shared_buffer.notify();
             }
         }
-
-        stats::print_stats();
 
         Ok(())
     }
@@ -175,51 +177,96 @@ mod stats {
     use std::collections::HashMap;
     use std::cell::RefCell;
 
+    struct ThreadInfo {
+        pub times_map: HashMap<String, Vec<u128>>,
+    }
+
+    impl Drop for ThreadInfo {
+        fn drop(&mut self) {
+            print_stats(&self.times_map);
+
+        }
+    }
+
     thread_local! {
-        static TIMESMAP: RefCell<HashMap<String, Vec<u128>>> = RefCell::new(HashMap::new());
+
+        static THREAD_INFO: RefCell<ThreadInfo>
+        = RefCell::new(ThreadInfo {times_map: HashMap::new()});
     }
 
     /// Use a time guard to collect times easier
     pub struct TimeGuard {
+        enabled: bool,
         key: String,
         start: Instant,
     }
 
     impl TimeGuard {
         pub fn new(key: &str) -> Self {
-            Self { key: key.to_string(), start: Instant::now() }
+            Self { enabled: true, key: key.to_string(), start: Instant::now() }
+        }
+
+        pub fn disable(&mut self)
+        {
+            self.enabled = false;
         }
     }
 
     impl Drop for TimeGuard {
         fn drop(&mut self) {
+            if !self.enabled {
+                return
+            }
+
             let duration: u128 = self.start.elapsed().as_micros() ;
 
-            TIMESMAP.with(|map| {
-                let mut map = map.borrow_mut();
-                map.entry(self.key.clone())
+            THREAD_INFO.with(|thread_info| {
+
+                thread_info.borrow_mut().times_map.entry(self.key.clone())
                     .and_modify(|existing| existing.push(duration))
                     .or_insert_with(|| vec![duration]);
-            });
+            }
+            );
         }
     }
 
+    fn get_stats(timesvec: &Vec<u128> ) -> (usize, f64, u128, u128, u128) {
+        let sum: u128 = timesvec.iter().sum(); // Sum of all elements
+        let count = timesvec.len();    // Convert to f64 for division
 
-    pub fn print_stats()
+        let avg: f64 = (sum as f64) / (count as f64);
+
+        let max = *timesvec.iter().max().expect("Vector is empty"); // Find the max element
+        let min = *timesvec.iter().min().expect("Vector is empty"); // Find the min element
+
+        (count, avg, min, max, sum)
+    }
+
+    fn print_stats(map: &HashMap<String, Vec<u128>>)
+    {
+        let (tcount, tavg, tmin, tmax, tsum) = get_stats(map.get("Total").expect("Missing Total stats"));
+
+        for (key, timesvec) in map.iter().filter(|&(k, _)| k != "Total") {
+
+            let (count, avg, min, max, sum) = get_stats(timesvec);
+
+            let percent = (sum as f64) * 100. / (tsum as f64);
+
+            println!("{:16}\t count: {:<8} avg: {:<8.1} min: {:<8} max: {:<8} percent: {:<8.1}",
+                key, count, avg, min, max, percent);
+        }
+
+        println!("{:16}\t count: {:<8} avg: {:<8.1} min: {:<8} max: {:<8}",
+            "Total", tcount, tavg, tmin, tmax);
+    }
+
+    pub fn print_stats_public()
     {
         println!("Client stats: (times in microseconds)");
-        TIMESMAP.with(|map| {
-            for (key, timesvec) in map.borrow_mut().iter() {
-                let sum: u128 = timesvec.iter().sum(); // Sum of all elements
-                let count = timesvec.len() as f64;    // Convert to f64 for division
 
-                let avg: f64 = sum as f64 / count;
-
-                let max = timesvec.iter().max().expect("Vector is empty"); // Find the max element
-                let min = timesvec.iter().min().expect("Vector is empty"); // Find the min element
-
-                println!("{:16}\t count:{:8} avg:{:8.1} min:{:8} max:{:8}", key, count, avg, min, max);
-            }
+        THREAD_INFO.with(|thread_info| { 
+            // Total values
+            print_stats(&thread_info.borrow().times_map);
         })
     }
 

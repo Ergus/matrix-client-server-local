@@ -258,6 +258,25 @@ where
         transposed
     }
 
+    // Transpose
+    pub fn transpose_parallel(&self, blocksize: usize) -> Matrix<T>
+    {
+        let mut transposed = Matrix::<T>::new(self.cols, self.rows);
+
+        let mut block = Matrix::<T>::new(blocksize, blocksize);
+
+        for row_block in (0..self.rows).step_by(blocksize) {
+            for col_block in (0..self.cols).step_by(blocksize) {
+
+                self.copy_to_block(&mut block, row_block, col_block);
+                block.transpose_small_square();
+                transposed.copy_from_block(&block, col_block, row_block);
+            }
+        }
+
+        transposed
+    }
+
     /// This is a simple heuristic, we may tune it 
     fn is_small_enough(&self) -> bool
     {

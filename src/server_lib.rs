@@ -130,7 +130,7 @@ impl Drop for Server {
 
 
 pub struct Client<'a> {
-    id: u64,
+    pub id: u64,
     pub shared_buffer: SharedBuffer<'a>,
 }
 
@@ -256,7 +256,7 @@ mod stats {
                 key, count, avg, min, max, percent);
         }
 
-        println!("{:16}\t count: {:<8} avg: {:<8.1} min: {:<8} max: {:<8}",
+        println!("{:16}\t count: {:<8} avg: {:<10.1} min: {:<10} max: {:<10}",
             "Total", tcount, tavg, tmin, tmax);
     }
 

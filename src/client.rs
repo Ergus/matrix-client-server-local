@@ -1,6 +1,7 @@
 
-use std::env;
+use std::{env,mem};
 use rand::seq::SliceRandom;
+use std::sync::{Arc, Mutex};
 
 use irreductible::{Matrix, Client};
 
@@ -38,6 +39,55 @@ fn parse_cl(args: &Vec<String>) -> (usize, usize, usize, usize)
     ret
 }
 
+/// Initialize the matrix vector in parallel.
+fn init_matrix_set(set_size: usize, rows: usize, cols: usize) -> Vec<Box<Matrix<f64>>>
+{
+    let num_threads: usize = 4;
+
+    let result_vec = Arc::new(Mutex::new(Vec::<Box::<Matrix<f64>>>::with_capacity(set_size)));
+
+    let mut handles = vec![];
+
+    // Calculate how many items each thread should process
+    let chunk_size = set_size / num_threads;
+    let rest = set_size - chunk_size * num_threads;
+
+    for i in 0..num_threads {
+        let vec_clone = Arc::clone(&result_vec);
+
+        let size = chunk_size + ((i < rest) as usize);
+
+        if size == 0 {
+            break;
+        }
+
+        let handle = std::thread::spawn(move || {
+            println!("Thread {} initializes {} matrices", i, size);
+            // Initialize a portion of the Vec
+            let mut local_vec = Vec::new();
+
+            for _ in 0..size {
+                local_vec.push(Box::new(Matrix::<f64>::random(rows, cols)));
+            }
+
+            // Lock the mutex and append the local vector to the shared result vector
+            let mut result = vec_clone.lock().unwrap();
+            result.extend(local_vec);
+
+            println!("Thread {} done.", i)
+        });
+
+        handles.push(handle);
+    };
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let mut guard = result_vec.lock().unwrap();
+    mem::take(&mut *guard)
+}
+
 fn main() -> nix::Result<()>
 {
     let args: Vec<String> = env::args().collect();
@@ -48,13 +98,19 @@ fn main() -> nix::Result<()>
     let cols = 2_usize.pow(n as u32);
 
     println!("Initializing matrices");
-    let data: Vec<Matrix<f64>> = (0..set_size).map(|_| Matrix::<f64>::random(rows, cols)).collect();
+    let data = init_matrix_set(set_size, rows, cols);
 
     let payload_size: u64 = data.first().expect("The data array is empty?").payload_size() as u64;
 
     println!("Connecting to server");
     let mut client = Client::new(payload_size);
 
+    if client.id == 0 {
+        eprintln!("Could not establish connection, server returned 0");
+        std::process::exit(1);
+    }
+
+    println!("Connection established with client id: {}", client.id);
     let mut rng = rand::thread_rng();
 
 
@@ -73,13 +129,13 @@ fn main() -> nix::Result<()>
 
         let transpose = tmp.expect("Error").transpose();
 
-        println!("Received:");
-        print!("{}", received);
+        // println!("Received:");
+        // print!("{}", received);
 
-        println!("transpose:");
-        print!("{}", transpose);
+        // println!("transpose:");
+        // print!("{}", transpose);
 
-        println!("\n");
+        println!("Received!");
 
         if received != transpose {
             let diff: Vec<_> = received.data().into_iter().zip(transpose.data()).map(|(a, b)| a - b).collect();

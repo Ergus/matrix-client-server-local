@@ -2,7 +2,7 @@ use nix::unistd::{read, write, close};
 use nix::sys::socket::{
     accept, bind, listen, socket, AddressFamily, SockFlag, SockType, connect
 };
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::{AsRawFd};
 use std::os::fd::RawFd;
 
 use crate::{Matrix, SharedBuffer};
@@ -45,7 +45,7 @@ impl Server {
         Self { counter: 0,  fd}
     }
 
-    fn server_thread(shared_buffer: &mut SharedBuffer) -> nix::Result<()>
+    pub fn server_thread(shared_buffer: &mut SharedBuffer) -> nix::Result<()>
     {
         // Clear the ready flag
         println!("Server is waiting for client...");
@@ -79,41 +79,65 @@ impl Server {
     }
 
 
-
-    pub fn run(&mut self) -> nix::Result<()>
+    pub fn wait_client(&mut self) -> nix::Result<(RawFd, u64, u64)>
     {
         let mut buf = [0u8; 8];
 
-        loop {
-            // Accept a new connection
-            let client_fd = accept(self.fd)?;
+        let client_fd = accept(self.fd)?;
 
-            let client_fd = unsafe { std::fs::File::from_raw_fd(client_fd) };
-
-            // Read the number from the client
-            match read(client_fd.as_raw_fd(), &mut buf) {
-                Ok(n) if n > 0 => {
-
-                    let payload_size = u64::from_be_bytes(buf);
-                    self.counter = self.counter + 1;
-                    let id: u64 = self.counter;
-
-                    std::thread::spawn(move || {
-
-                        let mut shared_buffer = SharedBuffer::new(false, id, payload_size as usize);
-
-                        let _ = write(client_fd.as_raw_fd(), &id.to_be_bytes());
-
-                        let _ = Self::server_thread(&mut shared_buffer);
-
-                        println!("Server exiting...");
-                    });
-                }
-                Ok(_) => println!("Client disconnected"),
-                Err(err) => eprintln!("Error reading from client: {}", err),
-            };
+        // Read the number from the client
+        match read(client_fd.as_raw_fd(), &mut buf) {
+            Ok(n) if n > 0 => {
+                let payload_size = u64::from_be_bytes(buf);
+                self.counter = self.counter + 1;
+                Ok((client_fd, self.counter, payload_size))
+            }
+            Ok(_) => {
+                eprintln!("Client disconnected");
+                Err(nix::errno::Errno::EPIPE)
+            },
+            Err(err) => {
+                eprintln!("Error reading from client: {}", err);
+                Err(err)
+            },
         }
     }
+
+
+    // pub fn run(&mut self) -> nix::Result<()>
+    // {
+    //     let mut buf = [0u8; 8];
+
+    //     loop {
+    //         // Accept a new connection
+    //         let client_fd = accept(self.fd)?;
+
+    //         let client_fd = unsafe { std::fs::File::from_raw_fd(client_fd) };
+
+    //         // Read the number from the client
+    //         match read(client_fd.as_raw_fd(), &mut buf) {
+    //             Ok(n) if n > 0 => {
+
+    //                 let payload_size = u64::from_be_bytes(buf);
+    //                 self.counter = self.counter + 1;
+    //                 let id: u64 = self.counter;
+
+    //                 std::thread::spawn(move || {
+
+    //                     let mut shared_buffer = SharedBuffer::new(false, id, payload_size as usize);
+
+    //                     let _ = write(client_fd.as_raw_fd(), &id.to_be_bytes());
+
+    //                     let _ = Self::server_thread(&mut shared_buffer);
+
+    //                     println!("Server exiting...");
+    //                 });
+    //             }
+    //             Ok(_) => println!("Client disconnected"),
+    //             Err(err) => eprintln!("Error reading from client: {}", err),
+    //         };
+    //     }
+    // }
 }
 
 impl Drop for Server {
@@ -166,7 +190,8 @@ impl Client<'_> {
         nix::unistd::close(fd).unwrap();
 
 
-        let shared_buffer = SharedBuffer::new(true, id, payload_size as usize);
+        let shared_buffer = SharedBuffer::new(true, id, payload_size as usize)
+            .expect("Client couldn't create shared buffer");
 
         Self { id, shared_buffer }
     }

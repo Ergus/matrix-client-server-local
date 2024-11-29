@@ -24,7 +24,7 @@ pub struct SharedBuffer<'a> {
 impl SharedBuffer<'_> {
 
     /// Constructor
-    pub fn new(is_client: bool, id: u64, payload_size: usize) -> Self
+    pub fn new(is_client: bool, id: u64, payload_size: usize) -> nix::Result<Self>
     {
         let shm_name: String = format!("/rust_ipc_shm_{}", id);
         let shm_full_size: usize = size_of::<AtomicBool>() + payload_size;
@@ -56,7 +56,7 @@ impl SharedBuffer<'_> {
 
         ready_flag.store(false, Ordering::SeqCst);
 
-        Self { shm_name, shm_full_size, is_client, shm_fd, ptr, ready_flag, payload}
+        Ok(Self { shm_name, shm_full_size, is_client, shm_fd, ptr, ready_flag, payload})
     }
 
     pub fn notify(&self)

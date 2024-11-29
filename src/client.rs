@@ -36,16 +36,18 @@ fn main() -> nix::Result<()> {
     let rows = 2_usize.pow(m);
     let cols = 2_usize.pow(n);
 
-    // Initialize vector set
+    println!("Initializing matrices");
     let data: Vec<Matrix<f64>> = (0..set_size).map(|_| Matrix::<f64>::random(rows, cols)).collect();
-
 
     let payload_size: u64 = data.first().expect("The data array is empty?").payload_size() as u64;
 
+    println!("Connecting to server");
     let mut client = Client::new(payload_size);
 
     let mut rng = rand::thread_rng();
 
+
+    println!("Lets go!!");
     for _ in 0..n_requests {
 
         let tmp = data.choose(&mut rng);
@@ -85,6 +87,7 @@ fn main() -> nix::Result<()> {
         debug_assert_eq!(received, transpose, "Received matrix is not the transpose");
     }
 
+    println!("Inform the server that I am leaving!!");
     client.shared_buffer.send(&Matrix::<f64>::new(0, 0));
 
     Ok(())

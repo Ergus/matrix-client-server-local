@@ -4,37 +4,48 @@ use rand::seq::SliceRandom;
 
 use irreductible::{Matrix, Client};
 
-
-fn main() -> nix::Result<()> {
-
-    let args: Vec<String> = env::args().collect();
-
+fn parse_cl(args: &Vec<String>) -> (usize, usize, usize, usize)
+{
     if args.len() != 5 {
         eprintln!("Usage: {} m n set_size n_requests", args[0]);
         std::process::exit(1);
     }
 
     // Parse the first four arguments as usize
-    let parsed_args: Vec<u32> = args[1..]  // skip the first element (program name)
+    let parsed_args: Vec<usize> = args[1..]  // skip the first element (program name)
         .iter()
-        .map(|x| x.parse::<u32>().unwrap()) // parse each argument
+        .map(|x| x.parse::<usize>().unwrap()) // parse each argument
         .collect();
 
     // Destructure the parsed arguments
-    let (m, n, set_size, n_requests) = (
+    let ret = (
         parsed_args[0],
         parsed_args[1],
         parsed_args[2],
         parsed_args[3],
     );
 
-    assert!(m >= 4);
-    assert!(m <= 14);
-    assert!(n >= 4);
-    assert!(n <= 14);
+    // Validate 
+    match ret {
+        (m, n, set_size, n_requests) => {
+            assert!(m >= 4 && m <= 14, "m is out of range");
+            assert!(n >= 4 && n <= 14, "m is out of range");
+            assert!(set_size > 0, "Set size cannot be zero");
+            assert!(n_requests > 0, "The number of requests cannot be zero");
+        }
+    };
 
-    let rows = 2_usize.pow(m);
-    let cols = 2_usize.pow(n);
+    ret
+}
+
+fn main() -> nix::Result<()>
+{
+    let args: Vec<String> = env::args().collect();
+
+    let (m, n, set_size, n_requests) = parse_cl(&args);
+
+    let rows = 2_usize.pow(m as u32);
+    let cols = 2_usize.pow(n as u32);
 
     println!("Initializing matrices");
     let data: Vec<Matrix<f64>> = (0..set_size).map(|_| Matrix::<f64>::random(rows, cols)).collect();

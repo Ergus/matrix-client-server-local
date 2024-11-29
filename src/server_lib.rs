@@ -12,7 +12,6 @@ pub struct Server {
     fd: RawFd,
 }
 
-
 impl Server {
 
     pub const SOCKET_PATH: &'static str = "/tmp/rust_unix_socket";
@@ -78,7 +77,7 @@ impl Server {
         Ok(())
     }
 
-
+    /// This is not "elegant" to return a tuple, but it is simple enough
     pub fn wait_client(&mut self) -> nix::Result<(RawFd, u64, u64)>
     {
         let mut buf = [0u8; 8];
@@ -102,42 +101,6 @@ impl Server {
             },
         }
     }
-
-
-    // pub fn run(&mut self) -> nix::Result<()>
-    // {
-    //     let mut buf = [0u8; 8];
-
-    //     loop {
-    //         // Accept a new connection
-    //         let client_fd = accept(self.fd)?;
-
-    //         let client_fd = unsafe { std::fs::File::from_raw_fd(client_fd) };
-
-    //         // Read the number from the client
-    //         match read(client_fd.as_raw_fd(), &mut buf) {
-    //             Ok(n) if n > 0 => {
-
-    //                 let payload_size = u64::from_be_bytes(buf);
-    //                 self.counter = self.counter + 1;
-    //                 let id: u64 = self.counter;
-
-    //                 std::thread::spawn(move || {
-
-    //                     let mut shared_buffer = SharedBuffer::new(false, id, payload_size as usize);
-
-    //                     let _ = write(client_fd.as_raw_fd(), &id.to_be_bytes());
-
-    //                     let _ = Self::server_thread(&mut shared_buffer);
-
-    //                     println!("Server exiting...");
-    //                 });
-    //             }
-    //             Ok(_) => println!("Client disconnected"),
-    //             Err(err) => eprintln!("Error reading from client: {}", err),
-    //         };
-    //     }
-    // }
 }
 
 impl Drop for Server {
@@ -159,7 +122,6 @@ pub struct Client<'a> {
     id: u64,
     pub shared_buffer: SharedBuffer<'a>,
 }
-
 
 impl Client<'_> {
 

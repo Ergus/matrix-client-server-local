@@ -1,27 +1,55 @@
-use std::ops::{Index, IndexMut};
+use std::ops::{Index, IndexMut, Sub};
 use std::{ptr, fmt, cmp};
-use rand::Rng;
 
+use rand::Rng;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use std::ffi::c_void;
 
-#[derive(Debug, Clone, PartialEq)]
+use std::sync::{Arc, RwLock};
+
+/// A trait to approximate "numeric types".
+pub trait Numeric: std::ops::Add<Output = Self> 
+                 + std::ops::Sub<Output = Self> 
+                 + std::ops::Mul<Output = Self> 
+                 + std::ops::Div<Output = Self> 
+                 + Copy
+                 + Send
+                 + Sync
+                 + Clone
+                 + Default
+                 + std::fmt::Debug
+                 + 'static {}
+
+impl<T> Numeric for T where T: std::ops::Add<Output = T> 
+                             + std::ops::Sub<Output = T> 
+                             + std::ops::Mul<Output = T> 
+                             + std::ops::Div<Output = T> 
+                             + Copy
+                             + Send
+                             + Sync
+                             + Clone
+                             + Default
+                             + std::fmt::Debug
+                             + 'static {}
+
+#[derive(Debug, Clone)]
 pub struct Matrix<T> {
     rows: usize,
     cols: usize,
-    data: Vec<T>,
+    data: Arc<RwLock<Vec<T>>>,
 }
 
 impl<T> Matrix<T>
 where
-    T: Clone + Default + std::fmt::Debug, Standard: Distribution<T>
+    T: Numeric, Standard: Distribution<T>
 {
     const BLOCKDIM: usize = 64;  // This si a simple empiric value, we may tune it.
 
     /// Constructor
     pub fn new(rows: usize, cols: usize) -> Self {
-        let data = vec![T::default(); rows * cols];
+        let data = Arc::new(RwLock::new(vec![T::default(); rows * cols]));
+
         Self { rows, cols, data }
     }
 
@@ -30,10 +58,15 @@ where
     where
         F: FnMut(usize, usize) -> T,
     {
-        let mut data = Vec::with_capacity(rows * cols);
-        for i in 0..rows {
-            for j in 0..cols {
-                data.push(f(i, j));
+        let data = Arc::new(RwLock::new(Vec::with_capacity(rows * cols)));
+
+        {
+            let mut wguard = data.write().unwrap();
+
+            for i in 0..rows {
+                for j in 0..cols {
+                    wguard.push(f(i, j));
+                }
             }
         }
         Self { rows, cols, data }
@@ -43,8 +76,10 @@ where
     pub fn random(rows: usize, cols: usize) -> Self
     {
         let mut rng = rand::thread_rng();
-        let data: Vec<T> = (0..rows * cols).map(|_| rng.gen()).collect();
-        Self { rows, cols,  data}
+
+        let data = Arc::new(RwLock::new((0..rows * cols).map(|_| rng.gen()).collect()));
+
+        Self { rows, cols, data}
     }
 
     pub fn from_buffer(buffer: *const c_void) -> Self
@@ -52,37 +87,44 @@ where
         let rows: usize = unsafe { *(buffer as *const usize) };
         let cols: usize = unsafe { *(buffer.add(8) as *const usize) };
 
-        let mut data = vec![T::default(); rows * cols];
+        let data = Arc::new(RwLock::new(vec![T::default(); rows * cols]));
 
         unsafe {
+            let mut wguard = data.write().unwrap();
+
             ptr::copy_nonoverlapping(
                 buffer.add(16) as *const T,
-                data.as_mut_ptr(),
+                wguard.as_mut_ptr(),
                 rows * cols
             );
-        }
 
+        }
         Self {rows, cols,  data}
     }
 
 
     pub fn validate(&self) -> bool
     {
-        self.rows > 16
-            && self.cols >= 16
-            && self.data.len() == self.rows * self.cols
+        {
+            let rguard = self.data.read().unwrap();
+
+            self.rows > 16
+                && self.cols >= 16
+                && rguard.len() == self.rows * self.cols
+        }
     }
 
     /// Very primitive serialization function
     pub fn to_buffer(&self, buffer: *mut c_void)
     {
         unsafe {
+            let rguard = self.data.read().unwrap();
 
             *(buffer as *mut usize) = self.rows;
             *(buffer.add(size_of::<usize>()) as *mut usize) = self.cols;
 
             ptr::copy_nonoverlapping(
-                self.data.as_ptr(),
+                rguard.as_ptr(),
                 buffer.add(2 * size_of::<usize>()) as *mut T,
                 self.rows * self.cols
             );
@@ -94,72 +136,66 @@ where
         self.rows
     }
 
-    /// gcd is the min because we assume 2^n x 2^m matrices
-    fn gcd(&self) -> usize {
-        cmp::min(self.rows, self.cols)
-    }
-
-
     /// Get Cols
     pub fn cols(&self) -> usize {
         self.cols
     }
 
-    /// Get
-    pub fn get(&self, row: usize, col: usize) -> Option<&T> {
-        if row < self.rows && col < self.cols {
-            Some(&self.data[row * self.cols + col])
-        } else {
-            None
-        }
+    /// Get Cols
+    pub fn datalen(&self) -> usize {
+        self.cols * self.rows
     }
 
-    /// Get Ref
-    pub fn get_mut(&mut self, row: usize, col: usize) -> Option<&mut T> {
-        if row < self.rows && col < self.cols {
-            Some(&mut self.data[row * self.cols + col])
-        } else {
-            None
-        }
-    }
 
-    /// Get Ref
-    pub fn data(&self) -> &Vec<T> {
-        &self.data
+    /// gcd is the min because we assume 2^n x 2^m matrices
+    fn gcd(&self) -> usize {
+        cmp::min(self.rows, self.cols)
     }
 
     pub fn payload_size(&self) -> usize
     {
-        2 * size_of::<usize>() + self.rows * self.cols * size_of::<f64>()
+        2 * size_of::<usize>() + self.datalen() * size_of::<f64>()
+    }
+
+    pub fn all(&mut self, f: impl FnMut(&T)->bool) -> bool
+    {
+        let rguard = self.data.read().unwrap();
+
+        rguard.iter().all(f)
     }
 
 
     fn copy_to_block(&self, block: &mut Matrix<T>, row_block: usize, col_block: usize)
     {
-        assert_eq!(block.rows, block.cols, "block must be squared");
+        //assert_eq!(block.rows, block.cols, "block must be squared");
 
         let row_end: usize = (row_block + block.rows()).min(self.rows);
 
         let col_end: usize = (col_block + block.cols()).min(self.cols);
         let copysize: usize = col_end - col_block;
 
-        let src: *const T = self.data.as_ptr();
-        let dst: *mut T = block.data.as_mut_ptr();
+        {
+            let rguard = self.data.read().unwrap();
+            let mut wguard_block = block.data.write().unwrap();
 
-        let mut startdst: usize = 0;
+            let src: *const T = rguard.as_ptr();
+            let dst: *mut T = wguard_block.as_mut_ptr();
 
-        // Copy from matrix to blocks
-        for row in row_block..row_end {
+            let mut startdst: usize = 0;
 
-            unsafe {
-                // Efficient vectorized copy (~memcpy)
-                ptr::copy_nonoverlapping(
-                    src.add(row * self.cols + col_block),
-                    dst.add(startdst),
-                    copysize);
+            // Copy from matrix to blocks
+            for row in row_block..row_end {
+
+                unsafe {
+                    // Efficient vectorized copy (~memcpy)
+                    ptr::copy_nonoverlapping(
+                        src.add(row * self.cols + col_block),
+                        dst.add(startdst),
+                        copysize);
+                }
+
+                startdst += block.cols();
             }
-
-            startdst += block.cols();
         }
     }
 
@@ -174,23 +210,29 @@ where
         let col_end: usize = (col_block + block.cols()).min(self.cols);
         let copysize: usize = col_end - col_block;
 
-        let src: *mut T = self.data.as_mut_ptr();
-        let dst: *const T = block.data.as_ptr();
+        {
+            let mut wguard = self.data.write().unwrap();
+            let rguard_block = block.data.read().unwrap();
 
-        let mut startdst: usize = 0;
 
-        // Copy from matrix to blocks
-        for row in row_block..row_end {
+            let src: *mut T = wguard.as_mut_ptr();
+            let dst: *const T = rguard_block.as_ptr();
 
-            unsafe {
-                // Efficient vectorized copy (~memcpy)
-                ptr::copy_nonoverlapping(
-                    dst.add(startdst),
-                    src.add(row * self.cols + col_block),
-                    copysize);
+            let mut startdst: usize = 0;
+
+            // Copy from matrix to blocks
+            for row in row_block..row_end {
+
+                unsafe {
+                    // Efficient vectorized copy (~memcpy)
+                    ptr::copy_nonoverlapping(
+                        dst.add(startdst),
+                        src.add(row * self.cols + col_block),
+                        copysize);
+                }
+
+                startdst += block.cols();
             }
-
-            startdst += block.cols();
         }
     }
 
@@ -199,12 +241,14 @@ where
     {
         assert_eq!(self.rows, self.cols, "Small transpose must be squared");
 
+        let mut wguard = self.data.write().unwrap();
+
         for row in 0..self.rows {
             for col in 0..row {
 
-                let tmp: T = self.data[col * self.rows + row].clone();
-                self.data[col * self.rows + row] = self.data[row * self.cols + col].clone();
-                self.data[row * self.cols + col] = tmp;
+                let tmp: T = wguard[col * self.rows + row].clone();
+                wguard[col * self.rows + row] = wguard[row * self.cols + col].clone();
+                wguard[row * self.cols + col] = tmp;
             }
         }
     }
@@ -215,11 +259,16 @@ where
         assert!(self.rows <= 64, "Small rectangle tranpose rows must not exceed 64");
         assert!(self.cols <= 64, "Small rectangle tranpose rows must not exceed 64");
 
-        let mut transpose = Matrix::<T>::new(self.cols, self.rows);
+        let transpose = Matrix::<T>::new(self.cols, self.rows);
 
-        for row in 0..self.rows {
-            for col in 0..self.cols {
-                transpose[(col, row)] = self[(row, col)].clone();
+        {
+            let rguard = self.data.read().unwrap();
+            let mut twguard = transpose.data.write().unwrap();
+
+            for row in 0..self.rows {
+                for col in 0..self.cols {
+                    twguard[col * self.rows + row] = rguard[row * self.cols + col].clone();
+                }
             }
         }
 
@@ -258,29 +307,86 @@ where
         transposed
     }
 
+    // fn transpose_parallel_private(aself: &Arc<RwLock<&Matrix<T>>>, blocksize: usize) -> Matrix<T>
+    // {
+    //     // TODO: Improve this
+    //     let n_threads = 4;
+
+    //     let mut handles = vec![];
+
+    //     let rguard = aself.read().unwrap();
+
+    //     let mut transposed = Matrix::<T>::new(rguard.cols, rguard.rows);
+
+    //     let cols_blocks = rguard.rows / blocksize;
+
+    //     let cols_blocks_per_thread = cols_blocks / n_threads;
+
+    //     let rest = cols_blocks - cols_blocks_per_thread * n_threads;
+
+    //     for i in 0..n_threads {
+
+    //         let cloned_self: Arc<RwLock<&Matrix<T>>> = Arc::clone(&aself);
+
+    //         let handle = std::thread::spawn(move || {
+
+    //             let mut block = Matrix::<T>::new(blocksize, blocksize);
+
+    //             let block_offset = i * cols_blocks_per_thread + cmp::min(i, rest);
+    //             let nblocks_cols = cols_blocks_per_thread + ((i < rest) as usize);
+
+    //             let read_guard = cloned_self.read().unwrap();
+
+    //             for col_block in block_offset..block_offset + nblocks_cols {
+
+    //                 let col = col_block * blocksize;
+
+    //                 for row in (0..read_guard.rows).step_by(blocksize) {
+
+    //                     read_guard.copy_to_block(&mut block, row, col);
+    //                     block.transpose_small_square();
+
+    //                     //transposed.copy_from_block(&block, col, row);
+
+    //             // for row_block in (0..self.rows).step_by(blocksize) {
+    //             //     for col_block in (0..self.cols).step_by(blocksize) {
+
+    //             //         self.copy_to_block(&mut block, row_block, col_block);
+    //             //         block.transpose_small_square();
+    //             //         
+    //             //     }
+    //             // }
+    //                 }
+    //             }
+
+    //         });
+
+    //         handles.push(handle);
+
+    //     }
+
+    //     for handle in handles {
+    //         handle.join().unwrap();
+    //     }
+
+    //     transposed
+
+    // }
+
     // Transpose
-    pub fn transpose_parallel(&self, blocksize: usize) -> Matrix<T>
-    {
-        let mut transposed = Matrix::<T>::new(self.cols, self.rows);
+    // pub fn transpose_parallel(&self, blocksize: usize) -> Matrix<T>
+    // {
+    //     assert_eq!(self.rows / blocksize, 0);
 
-        let mut block = Matrix::<T>::new(blocksize, blocksize);
+    //     let shared_data = Arc::new(RwLock::new(self));
 
-        for row_block in (0..self.rows).step_by(blocksize) {
-            for col_block in (0..self.cols).step_by(blocksize) {
-
-                self.copy_to_block(&mut block, row_block, col_block);
-                block.transpose_small_square();
-                transposed.copy_from_block(&block, col_block, row_block);
-            }
-        }
-
-        transposed
-    }
+    //     Matrix::<T>::transpose_parallel_private(&shared_data, blocksize)
+    // }
 
     /// This is a simple heuristic, we may tune it 
     fn is_small_enough(&self) -> bool
     {
-        self.data.len() < Self::BLOCKDIM * Self::BLOCKDIM
+        self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM
             || self.cols < Self::BLOCKDIM
             || self.rows < Self::BLOCKDIM
     }
@@ -294,32 +400,51 @@ where
         self.transpose_big(Self::BLOCKDIM)
     }
 
+    pub fn get(&self, row: usize, col: usize) -> T
+    {
+        let rguard = self.data.read().unwrap();
+        rguard[row * self.cols + col]
+    }
 
-}
 
-/// Immutable indexing
-impl<T> Index<(usize, usize)> for Matrix<T> {
-    type Output = T;
+    pub fn sub(&self, other: &Matrix<T>) -> Matrix<T> {
 
-    fn index(&self, index: (usize, usize)) -> &Self::Output {
-        let (row, col) = index;
-        &self.data[row * self.cols + col]
+        assert_eq!(self.rows, other.rows);
+        assert_eq!(self.cols, other.cols);
+
+        let rguard1 = self.data.read().unwrap();
+        let rguard2 = other.data.read().unwrap();
+
+        Matrix::<T>::from_fn(
+            self.rows,
+            self.cols,
+            |i, j| rguard1[i * self.cols + j] - rguard2[i * self.cols + j]
+        )
     }
 }
 
-/// Mutable indexing
-impl<T> IndexMut<(usize, usize)> for Matrix<T> {
-    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        let (row, col) = index;
-        &mut self.data[row * self.cols + col]
+impl<T: std::cmp::PartialEq> PartialEq<Matrix<T>> for Matrix<T> {
+
+    fn eq(&self, other: &Matrix<T>) -> bool {
+        let rguard1 = self.data.read().unwrap();
+        let rguard2 = other.data.read().unwrap();
+
+        return self.rows == other.rows
+            && self.cols == other.cols
+            && *rguard1 == *rguard2;
     }
 }
+
 
 /// Helper for print
 impl<T: std::fmt::Debug> fmt::Display for Matrix<T> {
+
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+
+        let rguard = self.data.read().unwrap();
+
         for i in 0..self.rows {
-            let slice = &self.data[i * self.cols.. (i + 1) * self.cols];
+            let slice = &rguard[i * self.cols.. (i + 1) * self.cols];
 
             write!(f, "{:?}\n", slice)?;  // Format each row and move to the next line
         }
@@ -327,7 +452,6 @@ impl<T: std::fmt::Debug> fmt::Display for Matrix<T> {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -345,58 +469,9 @@ mod tests {
         // Verify all elements
         for i in 0..3 {
             for j in 0..4 {
-                assert_eq!(matrix[(i, j)], 0);
+                assert_eq!(matrix.get(i, j), 0);
             }
         }
-    }
-
-    #[test]
-    fn test_matrix_indexing()
-    {
-        let mut matrix = Matrix::<i32>::new(2, 2);
-
-        // Set values
-        matrix[(0, 0)] = 1;
-        matrix[(0, 1)] = 2;
-        matrix[(1, 0)] = 3;
-        matrix[(1, 1)] = 4;
-
-        // Verify values
-        assert_eq!(matrix[(0, 0)], 1);
-        assert_eq!(matrix[(0, 1)], 2);
-        assert_eq!(matrix[(1, 0)], 3);
-        assert_eq!(matrix[(1, 1)], 4);
-    }
-
-    #[test]
-    fn test_matrix_getters()
-    {
-        let mut matrix = Matrix::<i32>::new(3, 3);
-
-        // Use `get_mut` to modify a value
-        if let Some(value) = matrix.get_mut(1, 1) {
-            *value = 42;
-        }
-
-        // Verify with `get`
-        assert_eq!(matrix.get(1, 1), Some(&42));
-        assert_eq!(matrix.get(0, 0), Some(&0));
-        assert_eq!(matrix.get(3, 3), None); // Out of bounds
-    }
-
-    #[test]
-    fn test_matrix_clone_and_eq()
-    {
-        let matrix = Matrix::from_fn(2, 2, |i, j| i + j);
-        let cloned_matrix = matrix.clone();
-
-        // Verify equality
-        assert_eq!(matrix, cloned_matrix);
-
-        // Modify clone and verify inequality
-        let mut modified_clone = cloned_matrix.clone();
-        modified_clone[(0, 0)] = 99;
-        assert_ne!(matrix, modified_clone);
     }
 
     #[test]
@@ -421,7 +496,7 @@ mod tests {
         // Verify all elements
         for i in 0..8 {
             for j in 0..8 {
-                assert_eq!(matrix[(i, j)], i + j * 8);
+                assert_eq!(matrix.get(i, j), i + j * 8);
             }
         }
     }
@@ -436,7 +511,7 @@ mod tests {
         // Verify all elements
         for i in 0..16 {
             for j in 0..8 {
-                assert_eq!(out[(j, i)], matrix[(i, j)]);
+                assert_eq!(out.get(j, i), matrix.get(i, j));
             }
         }
     }
@@ -448,11 +523,10 @@ mod tests {
 
         let mut block = Matrix::<usize>::new(8, 8);
 
-
         for i in 0..8 {
             for j in 0..8 {
                 matrix.copy_to_block(&mut block, i * 8, j * 8);
-                assert!(block.data.iter().all(|&x| x == i * 8 + j));
+                assert!(block.all(|&x| x == i * 8 + j));
             }
         }
     }
@@ -473,12 +547,12 @@ mod tests {
 
         assert!(matrix.validate());
 
-
         let mut block = Matrix::<usize>::new(8, 8);
+
         for i in 0..8 {
             for j in 0..8 {
                 matrix.copy_to_block(&mut block, i * 8, j * 8);
-                assert!(block.data.iter().all(|&x| x == i * 8 + j));
+                assert!(block.all(|&x| x == i * 8 + j));
             }
         }
     }
@@ -486,7 +560,7 @@ mod tests {
     #[test]
     fn test_matrix_transpose_big_squared()
     {
-        let mut matrix = Matrix::from_fn(512, 512, |i, j| i * 512 + j);
+        let matrix = Matrix::from_fn(512, 512, |i, j| i * 512 + j);
         assert!(matrix.validate());
 
         let transposed = matrix.transpose_big(64);
@@ -495,7 +569,7 @@ mod tests {
         // Verify all elements
         for i in 0..512 {
             for j in 0..512 {
-                assert_eq!(transposed[(i, j)], matrix[(j, i)]);
+                assert_eq!(transposed.get(i, j), matrix.get(j, i));
             }
         }
     }
@@ -503,7 +577,7 @@ mod tests {
     #[test]
     fn test_matrix_transpose_big_random()
     {
-        let mut matrix = Matrix::<f64>::random(512, 1024);
+        let matrix = Matrix::<f64>::random(512, 1024);
         assert!(matrix.validate());
 
         let transposed = matrix.transpose_big(64);
@@ -511,7 +585,7 @@ mod tests {
         // Verify all elements
         for i in 0..512 {
             for j in 0..1024 {
-                assert_eq!(matrix[(i, j)], transposed[(j, i)]);
+                assert_eq!(matrix.get(i, j), transposed.get(j, i));
             }
         }
     }
@@ -520,7 +594,7 @@ mod tests {
     #[test]
     fn test_matrix_transpose_big_rectangular()
     {
-        let mut matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
+        let matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
         assert!(matrix.validate());
 
         let transposed = matrix.transpose_big(64);
@@ -529,7 +603,7 @@ mod tests {
         // Verify all elements
         for i in 0..512 {
             for j in 0..256 {
-                assert_eq!(matrix[(i, j)], transposed[(j, i)]);
+                assert_eq!(matrix.get(i, j), transposed.get(j, i));
             }
         }
     }

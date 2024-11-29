@@ -138,13 +138,16 @@ fn main() -> nix::Result<()>
         println!("Received!");
 
         if received != transpose {
-            let diff: Vec<_> = received.data().into_iter().zip(transpose.data()).map(|(a, b)| a - b).collect();
+            let difference = received.sub(&transpose);
 
             for i in 0..rows {
                 for j in 0..cols {
-                    if diff[i * cols + j] != 0. {
+                    let diff = difference.get(i, j);
+
+                    if diff != 0. {
+
                         println!("i={} j={} rec={} exp={} diff={}",
-                            i, j, received[(i,j)], transpose[(i,j)], diff[i * cols + j]
+                            i, j, received.get(i,j), transpose.get(i,j), diff
                         );
                     }
                 }

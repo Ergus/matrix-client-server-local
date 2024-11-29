@@ -60,7 +60,7 @@ impl Server {
                 let matrix = Matrix::<f64>::from_buffer(shared_buffer.payload);
 
                 // When we receive an empty matrix, then we break this thread and exit.
-                if matrix.data().len() == 0 {
+                if matrix.datalen() == 0 {
                     __guard_total.disable();
                     __guard.disable();
                     break;

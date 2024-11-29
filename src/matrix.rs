@@ -307,81 +307,60 @@ where
         transposed
     }
 
-    // fn transpose_parallel_private(aself: &Arc<RwLock<&Matrix<T>>>, blocksize: usize) -> Matrix<T>
-    // {
-    //     // TODO: Improve this
-    //     let n_threads = 4;
+    pub fn transpose_parallel(&self, blocksize: usize) -> Matrix<T>
+    {
+        // TODO: Improve this
+        let n_threads = 8;
 
-    //     let mut handles = vec![];
+        let mut handles = vec![];
 
-    //     let rguard = aself.read().unwrap();
+        let transposed = Matrix::<T>::new(self.cols, self.rows);
 
-    //     let mut transposed = Matrix::<T>::new(rguard.cols, rguard.rows);
+        let cols_blocks = self.rows / blocksize;
 
-    //     let cols_blocks = rguard.rows / blocksize;
+        let cols_blocks_per_thread = cols_blocks / n_threads;
 
-    //     let cols_blocks_per_thread = cols_blocks / n_threads;
+        let rest = cols_blocks - cols_blocks_per_thread * n_threads;
 
-    //     let rest = cols_blocks - cols_blocks_per_thread * n_threads;
+        for i in 0..n_threads {
 
-    //     for i in 0..n_threads {
 
-    //         let cloned_self: Arc<RwLock<&Matrix<T>>> = Arc::clone(&aself);
+            let cself = self.clone();
+            let mut ctran = transposed.clone();
 
-    //         let handle = std::thread::spawn(move || {
+            let handle = std::thread::spawn(move || {
 
-    //             let mut block = Matrix::<T>::new(blocksize, blocksize);
+                let mut block = Matrix::<T>::new(blocksize, blocksize);
 
-    //             let block_offset = i * cols_blocks_per_thread + cmp::min(i, rest);
-    //             let nblocks_cols = cols_blocks_per_thread + ((i < rest) as usize);
+                let block_offset = i * cols_blocks_per_thread + cmp::min(i, rest);
+                let nblocks_cols = cols_blocks_per_thread + ((i < rest) as usize);
 
-    //             let read_guard = cloned_self.read().unwrap();
+                for col_block in block_offset..block_offset + nblocks_cols {
 
-    //             for col_block in block_offset..block_offset + nblocks_cols {
+                    let col = col_block * blocksize;
 
-    //                 let col = col_block * blocksize;
+                    for row in (0..cself.rows).step_by(blocksize) {
 
-    //                 for row in (0..read_guard.rows).step_by(blocksize) {
+                        cself.copy_to_block(&mut block, row, col);
+                        block.transpose_small_square();
 
-    //                     read_guard.copy_to_block(&mut block, row, col);
-    //                     block.transpose_small_square();
+                        ctran.copy_from_block(&block, col, row);
+                    }
+                }
 
-    //                     //transposed.copy_from_block(&block, col, row);
+            });
 
-    //             // for row_block in (0..self.rows).step_by(blocksize) {
-    //             //     for col_block in (0..self.cols).step_by(blocksize) {
+            handles.push(handle);
 
-    //             //         self.copy_to_block(&mut block, row_block, col_block);
-    //             //         block.transpose_small_square();
-    //             //         
-    //             //     }
-    //             // }
-    //                 }
-    //             }
+        }
 
-    //         });
+        for handle in handles {
+            handle.join().unwrap();
+        }
 
-    //         handles.push(handle);
+        transposed
 
-    //     }
-
-    //     for handle in handles {
-    //         handle.join().unwrap();
-    //     }
-
-    //     transposed
-
-    // }
-
-    // Transpose
-    // pub fn transpose_parallel(&self, blocksize: usize) -> Matrix<T>
-    // {
-    //     assert_eq!(self.rows / blocksize, 0);
-
-    //     let shared_data = Arc::new(RwLock::new(self));
-
-    //     Matrix::<T>::transpose_parallel_private(&shared_data, blocksize)
-    // }
+    }
 
     /// This is a simple heuristic, we may tune it 
     fn is_small_enough(&self) -> bool

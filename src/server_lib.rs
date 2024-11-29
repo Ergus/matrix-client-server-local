@@ -72,9 +72,37 @@ impl Server {
 
             let transpose: Matrix::<f64> = {
                 let __guard = stats::TimeGuard::new(
-                    format!("Transpose_{}x{}", matrix.rows(), matrix.cols()).as_str()
+                    format!("Transpose_par_64_{}x{}", matrix.rows(), matrix.cols()).as_str()
                 );
-                matrix.transpose()
+                matrix.transpose_parallel(64)
+            };
+
+            {
+                let __guard = stats::TimeGuard::new(
+                    format!("Transpose_par_128_{}x{}", matrix.rows(), matrix.cols()).as_str()
+                );
+                matrix.transpose_parallel(128)
+            };
+
+            {
+                let __guard = stats::TimeGuard::new(
+                    format!("Transpose_par_256_{}x{}", matrix.rows(), matrix.cols()).as_str()
+                );
+                matrix.transpose_parallel(256)
+            };
+
+            {
+                let __guard = stats::TimeGuard::new(
+                    format!("Transpose_par_512_{}x{}", matrix.rows(), matrix.cols()).as_str()
+                );
+                matrix.transpose_parallel(512)
+            };
+
+            {
+                let __guard = stats::TimeGuard::new(
+                    format!("Transpose_seq_{}x{}", matrix.rows(), matrix.cols()).as_str()
+                );
+                matrix.transpose();
             };
 
             // Write the result back into shared memory
@@ -252,25 +280,13 @@ mod stats {
 
             let percent = (sum as f64) * 100. / (tsum as f64);
 
-            println!("{:16}\t count: {:<8} avg: {:<8.1} min: {:<8} max: {:<8} percent: {:<8.1}",
+            println!("{:24}\t count: {:<8} avg: {:<10.1} min: {:<10} max: {:<10} percent: {:<10.1}",
                 key, count, avg, min, max, percent);
         }
 
-        println!("{:16}\t count: {:<8} avg: {:<10.1} min: {:<10} max: {:<10}",
+        println!("{:24}\t count: {:<8} avg: {:<10.1} min: {:<10} max: {:<10}",
             "Total", tcount, tavg, tmin, tmax);
     }
-
-    pub fn print_stats_public()
-    {
-        println!("Client stats: (times in microseconds)");
-
-        THREAD_INFO.with(|thread_info| { 
-            // Total values
-            print_stats(&thread_info.borrow().times_map);
-        })
-    }
-
-
 
 }
 

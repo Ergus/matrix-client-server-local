@@ -85,7 +85,7 @@ impl SharedBuffer<'_> {
         Ok(Self { shm_full_size, is_client, shm_fd, ptr, ready_flag, payload})
     }
 
-    /// Change the flag value to notify the peer.
+    /// Change the flag value to notify the peer we are done.
     pub fn notify(&self)
     {
         self.ready_flag.store(self.is_client, Ordering::SeqCst);

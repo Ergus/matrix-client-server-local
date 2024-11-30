@@ -153,7 +153,7 @@ server given by the OS.
    to read-write in cache order, but also to use vectorized
    instructions.
    
-   The copy_from_block is also optimized with an unsafe call. As we
+   The `copy_from_block` is also optimized with an unsafe call. As we
    are confident that the threads won't write in same memory regions,
    we perform the write without taking the lock. Otherwise the write
    operation becomes a bottle neck when the number of threads grow and
@@ -179,8 +179,17 @@ server given by the OS.
    The right approach involves using a thread pool and to deliver
    tasks.
    
+   A workaround if this becomes an issue could be to take a lock in
+   the `parallel_transpose_` functions just before
+   `std::thread::scope`, in order to assert that only one
+   ``computation'' is creating threads at the time, but not blocking
+   other operations like copy from/to memory.
+   
 3. The stats are collected by thread-client not globally because I
    thing it is more useful in that way.
+   
+4. This doesn't have a robust error handling on the server or client
+   to manage peer disconnections.
 
 I spend about 2 days (Thursday: made it work, 1/2 Friday:
 Optimization, 1/2 Saturday: Readme, testing and optimizing a bit more)

@@ -203,6 +203,9 @@ where
     }
 
     /// Serialize the Matrix to a payload (buffer of contiguous memory)
+    ///
+    /// This uses the ptr::copy_nonoverlapping that improves
+    /// vectorization copy for memory chunks.
     fn copy_to_block(&self, block: &mut Matrix<T>, row_block: usize, col_block: usize)
     {
         //assert_eq!(block.rows, block.cols, "block must be squared");
@@ -232,6 +235,9 @@ where
     }
 
     /// Deserialize the matrix from a payload (buffer of contiguous memory)
+    ///
+    /// This uses the ptr::copy_nonoverlapping that improves
+    /// vectorization copy for memory chunks
     fn copy_from_block(&mut self, block: &Matrix<T>, row_block: usize, col_block: usize)
     {
         assert_eq!(block.rows, block.cols, "Block must be squared");
@@ -309,6 +315,13 @@ where
     }
 
     /// Full transpose for big matrices with blocks, but without threads.
+    ///
+    /// This sequential version with blocks is at leat ~3x faster than
+    /// the row transpose because the data is read in cache friendly
+    /// order to a temporal squared blocks that fit in cache line.
+    ///
+    /// The transposition is performed then within the cache and
+    /// written back to the main memory in cache frienly order again.
     pub fn transpose_big(&self, blocksize: usize) -> Matrix<T>
     {
         let mut transposed = Matrix::<T>::new(self.cols, self.rows);

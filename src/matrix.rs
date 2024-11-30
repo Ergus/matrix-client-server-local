@@ -1,5 +1,6 @@
 use std::{ptr, fmt, cmp};
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ffi::c_void;
 use std::fmt::Debug;
 
@@ -72,6 +73,7 @@ impl<T> Matrix<T>
 where
     T: Numeric64, Standard: Distribution<T>
 {
+    /// Default block dimension to use for temporal buffers.
     const BLOCKDIM: usize = 64;  // This si a simple empiric value, we may tune it.
 
     /// Basic constructor to create an empty matrix
@@ -326,10 +328,17 @@ where
     }
 
     /// Full transpose for big matrices with blocks and threads.
-    pub fn transpose_parallel(&self, blocksize: usize) -> Matrix<T>
+    /// This version user fair static dispatch 
+    pub fn transpose_parallel_static(&self, blocksize: usize) -> Matrix<T>
     {
-        // TODO: Improve this
-        let n_threads = 8;
+        // This si not the best approach for this because modern codes
+        // have different speed which implies that using all the cores
+        // at the time with similar chunk sizes implicitly introduces
+        // load imbalance. But this is a 3 days job, no time for more
+        // (maybe)
+        let n_threads
+            = std::thread::available_parallelism().unwrap().get();
+
         let transposed = Matrix::<T>::new(self.cols, self.rows);
 
         let blocks_cols = self.cols / blocksize;
@@ -342,6 +351,13 @@ where
 
             for i in 0..n_threads {
 
+                let nblocks_thread = blocks_per_thread + ((i < blocks_rest) as usize);
+
+                // This is for the case when there are less blocks than available cores
+                if nblocks_thread == 0 {
+                    break;
+                }
+
                 let cself = self.clone();
                 let mut ctran = transposed.clone();
 
@@ -350,7 +366,6 @@ where
                     let mut block = Matrix::<T>::new(blocksize, blocksize);
 
                     let first_block_thread = i * blocks_per_thread + cmp::min(i, blocks_rest);
-                    let nblocks_thread = blocks_per_thread + ((i < blocks_rest) as usize);
 
                     for blockid in first_block_thread..first_block_thread + nblocks_thread {
 
@@ -367,30 +382,82 @@ where
 
 
         transposed
-
     }
 
-    /// This is a simple heuristic to decide when to use the
-    /// un-blocked version, we may tune it.
-    fn is_small_enough(&self) -> bool
+    /// Full transpose for big matrices with blocks and threads.
+    /// This version uses dynamic dispatch to solve potential imbalances
+    /// when the host cores have different speed
+    pub fn transpose_parallel_dynamic(&self, blocksize: usize) -> Matrix<T>
     {
-        self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM
-            || self.cols < Self::BLOCKDIM
-            || self.rows < Self::BLOCKDIM
+        let n_threads
+            = std::thread::available_parallelism().unwrap().get();
+
+        let transposed = Matrix::<T>::new(self.cols, self.rows);
+
+        let blocks_cols = self.cols / blocksize;
+        let total_blocks = (self.rows / blocksize) * blocks_cols;
+
+        let counter = AtomicUsize::new(0);
+
+        std::thread::scope(|s| {
+
+            for i in 0..n_threads {
+
+                // This is for the case when there are less blocks than available cores
+                if i >= total_blocks {
+                    break;
+                }
+
+                let cself = self.clone();
+                let mut ctran = transposed.clone();
+                let counter_ref = &counter;
+
+                let _ = s.spawn(move || {
+
+                    let mut block = Matrix::<T>::new(blocksize, blocksize);
+
+                    loop {
+                        let blockid = counter_ref.fetch_add(1, Ordering::SeqCst);
+                        if blockid >= total_blocks {
+                            break;
+                        }
+
+                        let first_row = (blockid / blocks_cols) * blocksize;
+                        let first_col = (blockid % blocks_cols) * blocksize;
+
+                        cself.copy_to_block(&mut block, first_row, first_col);
+                        block.transpose_small_square_inplace();
+                        ctran.copy_from_block(&block, first_col, first_row);
+                    }
+                });
+            }
+        });
+
+
+        transposed
     }
 
     /// This is intended to become the main function to use in the
     /// server code.
     ///
-    /// # TODO
-    /// Still needs improve the heuristics
+    /// The function uses sequential code no blocking when the total
+    /// number of elements in the matrix is smaller than the prefered
+    /// block dimension (BLOCKDIM).
+    ///
+    /// When some of the dimension is smaller than the BLOCKDIM, but
+    /// the total matrix is bigger than BLOCKDIM x BLOCKDIM, we use
+    /// that dimension value as blockdim.
+    ///
+    /// Otherwise we use BLOCKDIM x BLOCKDIM
+    /// BLOCKDIM = 64 by default (hardcoded)
     pub fn transpose(&self) -> Matrix<T>
     {
-        if self.is_small_enough() {
-            return self.transpose_small_rectangle()
+        if self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM {
+            return self.transpose_small_rectangle();
         }
 
-        self.transpose_big(Self::BLOCKDIM)
+        let blockdim = *[self.cols, self.rows, Self::BLOCKDIM].iter().min().unwrap();
+        self.transpose_parallel_dynamic(blockdim)
     }
 
     /// Get a matrix value using copy.
@@ -611,12 +678,12 @@ mod tests {
 
 
     #[test]
-    fn test_matrix_transpose_big_parallel_high()
+    fn test_matrix_transpose_big_parallel_static_high()
     {
         let matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
         assert!(matrix.validate());
 
-        let transposed = matrix.transpose_parallel(64);
+        let transposed = matrix.transpose_parallel_static(64);
         assert!(transposed.validate());
 
         // Verify all elements
@@ -628,12 +695,46 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_big_parallel_width()
+    fn test_matrix_transpose_big_parallel_static_width()
     {
         let matrix = Matrix::from_fn(256, 512, |i, j| i * 512 + j);
         assert!(matrix.validate());
 
-        let transposed = matrix.transpose_parallel(64);
+        let transposed = matrix.transpose_parallel_static(64);
+        assert!(transposed.validate());
+
+        // Verify all elements
+        for i in 0..256 {
+            for j in 0..512 {
+                assert_eq!(matrix.get(i, j), transposed.get(j, i));
+            }
+        }
+    }
+
+    #[test]
+    fn test_matrix_transpose_big_parallel_dynamic_high()
+    {
+        let matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
+        assert!(matrix.validate());
+
+        let transposed = matrix.transpose_parallel_dynamic(64);
+        assert!(transposed.validate());
+
+        // Verify all elements
+        for i in 0..512 {
+            for j in 0..256 {
+                assert_eq!(matrix.get(i, j), transposed.get(j, i));
+            }
+        }
+    }
+
+    #[test]
+    fn test_matrix_transpose_big_parallel_dynamic_width()
+    {
+        let matrix = Matrix::from_fn(256, 512, |i, j| i * 512 + j);
+        assert!(matrix.validate());
+
+        let transposed = matrix.transpose_parallel_dynamic(64);
         assert!(transposed.validate());
 
         // Verify all elements

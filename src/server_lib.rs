@@ -81,7 +81,7 @@ impl Server {
                 let __guard = stats::TimeGuard::new(
                     format!("Transpose_par_64_{}x{}", matrix.rows(), matrix.cols()).as_str()
                 );
-                matrix.transpose_parallel(64)
+                matrix.transpose()
             };
 
             { // Write the result back into shared memory

@@ -236,9 +236,12 @@ where
         assert!(block.rows <= self.gcd(), "Block dim must be <= gcd");
         assert!(self.gcd() % block.rows == 0  , "Block must be a divisor of gcd");
 
-        let row_end: usize = (row_block + block.rows()).min(self.rows);
+        let row_end = row_block + block.rows();
+        let col_end = col_block + block.cols();
 
-        let col_end: usize = (col_block + block.cols()).min(self.cols);
+        assert!(row_end <= self.rows, "Rows overflow coping from block");
+        assert!(col_end <= self.cols, "Columns overflow coping from block");
+
         let copysize: usize = col_end - col_block;
 
         let src: *mut T = self.data.write().unwrap().as_mut_ptr();
@@ -327,14 +330,13 @@ where
     {
         // TODO: Improve this
         let n_threads = 8;
-
         let transposed = Matrix::<T>::new(self.cols, self.rows);
 
-        let cols_blocks = self.cols / blocksize;
+        let blocks_cols = self.cols / blocksize;
+        let total_blocks = (self.rows / blocksize) * blocks_cols;
 
-        let cols_blocks_per_thread = cols_blocks / n_threads;
-
-        let rest = cols_blocks - cols_blocks_per_thread * n_threads;
+        let blocks_per_thread = total_blocks / n_threads;
+        let blocks_rest = total_blocks % n_threads;  // This is likely to be zero
 
         std::thread::scope(|s| {
 
@@ -343,24 +345,21 @@ where
                 let cself = self.clone();
                 let mut ctran = transposed.clone();
 
-                s.spawn(move || {
+                let _ = s.spawn(move || {
 
                     let mut block = Matrix::<T>::new(blocksize, blocksize);
 
-                    let block_offset = i * cols_blocks_per_thread + cmp::min(i, rest);
-                    let nblocks_cols = cols_blocks_per_thread + ((i < rest) as usize);
+                    let first_block_thread = i * blocks_per_thread + cmp::min(i, blocks_rest);
+                    let nblocks_thread = blocks_per_thread + ((i < blocks_rest) as usize);
 
-                    for col_block in block_offset..block_offset + nblocks_cols {
+                    for blockid in first_block_thread..first_block_thread + nblocks_thread {
 
-                        let col = col_block * blocksize;
+                        let first_row = (blockid / blocks_cols) * blocksize;
+                        let first_col = (blockid % blocks_cols) * blocksize;
 
-                        for row in (0..cself.rows).step_by(blocksize) {
-
-                            cself.copy_to_block(&mut block, row, col);
-                            block.transpose_small_square_inplace();
-
-                            ctran.copy_from_block(&block, col, row);
-                        }
+                        cself.copy_to_block(&mut block, first_row, first_col);
+                        block.transpose_small_square_inplace();
+                        ctran.copy_from_block(&block, first_col, first_row);
                     }
                 });
             }

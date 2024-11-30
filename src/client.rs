@@ -42,47 +42,42 @@ fn parse_cl(args: &Vec<String>) -> (usize, usize, usize, usize)
 /// Initialize the matrix vector in parallel.
 fn init_matrix_set(set_size: usize, rows: usize, cols: usize) -> Vec<Box<Matrix<f64>>>
 {
-    let num_threads: usize = 4;
+    let num_threads: usize = std::thread::available_parallelism().unwrap().into();
 
     let result_vec = Arc::new(Mutex::new(Vec::<Box::<Matrix<f64>>>::with_capacity(set_size)));
-
-    let mut handles = vec![];
 
     // Calculate how many items each thread should process
     let chunk_size = set_size / num_threads;
     let rest = set_size - chunk_size * num_threads;
 
-    for i in 0..num_threads {
-        let vec_clone = Arc::clone(&result_vec);
+    std::thread::scope(|s| {
 
-        let size = chunk_size + ((i < rest) as usize);
+        for i in 0..num_threads {
+            let vec_clone = Arc::clone(&result_vec);
 
-        if size == 0 {
-            break;
-        }
+            let size = chunk_size + ((i < rest) as usize);
 
-        let handle = std::thread::spawn(move || {
-            println!("Thread {} initializes {} matrices", i, size);
-            // Initialize a portion of the Vec
-            let mut local_vec = Vec::new();
-
-            for _ in 0..size {
-                local_vec.push(Box::new(Matrix::<f64>::random(rows, cols)));
+            if size == 0 {
+                break;
             }
 
-            // Lock the mutex and append the local vector to the shared result vector
-            let mut result = vec_clone.lock().unwrap();
-            result.extend(local_vec);
+            s.spawn(move || {
+                println!("Thread {} initializes {} matrices", i, size);
+                // Initialize a portion of the Vec
+                let mut local_vec = Vec::new();
 
-            println!("Thread {} done.", i)
-        });
+                for _ in 0..size {
+                    local_vec.push(Box::new(Matrix::<f64>::random(rows, cols)));
+                }
 
-        handles.push(handle);
-    };
+                // Lock the mutex and append the local vector to the shared result vector
+                let mut result = vec_clone.lock().unwrap();
+                result.extend(local_vec);
 
-    for handle in handles {
-        handle.join().unwrap();
-    }
+                println!("Thread {} done.", i)
+            });
+        };
+    });
 
     let mut guard = result_vec.lock().unwrap();
     mem::take(&mut *guard)

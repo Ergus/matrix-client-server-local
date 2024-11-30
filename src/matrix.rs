@@ -1,4 +1,3 @@
-use std::ops::{Index, IndexMut, Sub};
 use std::{ptr, fmt, cmp};
 
 use rand::Rng;
@@ -312,8 +311,6 @@ where
         // TODO: Improve this
         let n_threads = 8;
 
-        let mut handles = vec![];
-
         let transposed = Matrix::<T>::new(self.cols, self.rows);
 
         let cols_blocks = self.rows / blocksize;
@@ -322,41 +319,37 @@ where
 
         let rest = cols_blocks - cols_blocks_per_thread * n_threads;
 
-        for i in 0..n_threads {
+        std::thread::scope(|s| {
+
+            for i in 0..n_threads {
 
 
-            let cself = self.clone();
-            let mut ctran = transposed.clone();
+                let cself = self.clone();
+                let mut ctran = transposed.clone();
 
-            let handle = std::thread::spawn(move || {
+                s.spawn(move || {
 
-                let mut block = Matrix::<T>::new(blocksize, blocksize);
+                    let mut block = Matrix::<T>::new(blocksize, blocksize);
 
-                let block_offset = i * cols_blocks_per_thread + cmp::min(i, rest);
-                let nblocks_cols = cols_blocks_per_thread + ((i < rest) as usize);
+                    let block_offset = i * cols_blocks_per_thread + cmp::min(i, rest);
+                    let nblocks_cols = cols_blocks_per_thread + ((i < rest) as usize);
 
-                for col_block in block_offset..block_offset + nblocks_cols {
+                    for col_block in block_offset..block_offset + nblocks_cols {
 
-                    let col = col_block * blocksize;
+                        let col = col_block * blocksize;
 
-                    for row in (0..cself.rows).step_by(blocksize) {
+                        for row in (0..cself.rows).step_by(blocksize) {
 
-                        cself.copy_to_block(&mut block, row, col);
-                        block.transpose_small_square();
+                            cself.copy_to_block(&mut block, row, col);
+                            block.transpose_small_square();
 
-                        ctran.copy_from_block(&block, col, row);
+                            ctran.copy_from_block(&block, col, row);
+                        }
                     }
-                }
+                });
+            }
+        });
 
-            });
-
-            handles.push(handle);
-
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
 
         transposed
 
@@ -402,6 +395,7 @@ where
     }
 }
 
+/// Operator ==
 impl<T: std::cmp::PartialEq> PartialEq<Matrix<T>> for Matrix<T> {
 
     fn eq(&self, other: &Matrix<T>) -> bool {
@@ -568,7 +562,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn test_matrix_transpose_big_rectangular()

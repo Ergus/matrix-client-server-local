@@ -8,7 +8,7 @@ rand = "0.8"
 nix = "0.24"
 
 [lib]
-name = "irreductible"
+name = "irreducible"
 path = "src/lib.rs"
 
 [[bin]]

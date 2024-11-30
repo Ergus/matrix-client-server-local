@@ -1,12 +1,11 @@
 use std::{ptr, fmt, cmp};
+use std::sync::{Arc, RwLock};
+use std::ffi::c_void;
+use std::fmt::Debug;
 
 use rand::Rng;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
-use std::ffi::c_void;
-
-use std::sync::{Arc, RwLock};
-use std::fmt::Debug;
 
 macro_rules! implement_numeric64 {
     ($($t:ty),*) => {

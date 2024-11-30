@@ -1,5 +1,5 @@
 use nix::unistd::write;
-use irreductible::{Server, SharedBuffer};
+use irreducible::{Server, SharedBuffer};
 
 fn main() -> nix::Result<()> {
 

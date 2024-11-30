@@ -1,9 +1,4 @@
-use nix::unistd::{read, write, close};
-use nix::sys::socket::{
-    accept, bind, listen, socket, AddressFamily, SockFlag, SockType, connect
-};
-use std::os::unix::io::{AsRawFd};
-use std::os::fd::RawFd;
+use std::os::{unix::io::AsRawFd, fd::RawFd};
 
 use crate::{Matrix, SharedBuffer};
 
@@ -28,19 +23,19 @@ impl Server {
         }
 
         // Create the Unix socket
-        let fd = socket(
-            AddressFamily::Unix,
-            SockType::Stream,
-            SockFlag::empty(),
+        let fd = nix::sys::socket::socket(
+            nix::sys::socket::AddressFamily::Unix,
+            nix::sys::socket::SockType::Stream,
+            nix::sys::socket::SockFlag::empty(),
             None,
         ).unwrap();
 
         // Bind the socket to the file system path
         let sockaddr = nix::sys::socket::UnixAddr::new(Self::SOCKET_PATH).unwrap();
-        bind(fd, &sockaddr).unwrap();
+        nix::sys::socket::bind(fd, &sockaddr).unwrap();
 
         // Start listening for incoming connections
-        listen(fd, 10).unwrap();
+        nix::sys::socket::listen(fd, 10).unwrap();
 
         println!("Server listening on {}", Self::SOCKET_PATH);
 
@@ -107,10 +102,10 @@ impl Server {
     {
         let mut buf = [0u8; 8];
 
-        let client_fd = accept(self.fd)?;
+        let client_fd = nix::sys::socket::accept(self.fd)?;
 
         // Read the number from the client
-        match read(client_fd.as_raw_fd(), &mut buf) {
+        match nix::unistd::read(client_fd.as_raw_fd(), &mut buf) {
             Ok(n) if n > 0 => {
                 let payload_size = u64::from_be_bytes(buf);
                 self.counter = self.counter + 1;
@@ -131,7 +126,7 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         // Close the listening socket
-        if let Err(err) = close(self.fd) {
+        if let Err(err) = nix::unistd::close(self.fd) {
             eprintln!("Failed to close listening socket: {}", err);
         }
 
@@ -160,21 +155,26 @@ impl Client<'_> {
     pub fn new(payload_size: u64) -> Self
     {
         // Create the socket
-        let fd = socket(AddressFamily::Unix, SockType::Stream, SockFlag::empty(), None).unwrap();
+        let fd = nix::sys::socket::socket(
+            nix::sys::socket::AddressFamily::Unix,
+            nix::sys::socket::SockType::Stream,
+            nix::sys::socket::SockFlag::empty(),
+            None
+        ).unwrap();
 
         // Create a Unix socket address
         let sockaddr = nix::sys::socket::UnixAddr::new(Server::SOCKET_PATH).unwrap();
 
         // Connect to the server
-        connect(fd, &sockaddr).unwrap();
+        nix::sys::socket::connect(fd, &sockaddr).unwrap();
 
         // Send a number
         let bytes = payload_size.to_be_bytes();
-        write(fd, &bytes).unwrap();
+        nix::unistd::write(fd, &bytes).unwrap();
 
         let mut buf = [0u8; 8];
 
-        let id = match read(fd, &mut buf) {
+        let id = match nix::unistd::read(fd, &mut buf) {
             Ok(n) if n == 8 => Ok(u64::from_be_bytes(buf)),
             Ok(_) => Err(nix::errno::Errno::EIO), // Handle incomplete reads
             Err(err) => Err(err)

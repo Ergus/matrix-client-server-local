@@ -1,9 +1,9 @@
-
 use std::{env,mem};
-use rand::seq::SliceRandom;
 use std::sync::{Arc, Mutex};
 
-use irreductible::{Matrix, Client};
+use rand::prelude::SliceRandom;
+
+use irreducible::{Matrix, Client};
 
 fn parse_cl(args: &Vec<String>) -> (usize, usize, usize, usize)
 {

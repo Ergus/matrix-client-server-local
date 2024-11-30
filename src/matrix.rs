@@ -283,7 +283,7 @@ where
     }
 
     /// Full transpose for small matrices without blocks.
-    fn transpose_small_rectangle(&self) -> Matrix<T>
+    pub fn transpose_small_rectangle(&self) -> Matrix<T>
     {
         assert!(self.rows <= 64, "Small rectangle tranpose rows must not exceed 64");
         assert!(self.cols <= 64, "Small rectangle tranpose rows must not exceed 64");

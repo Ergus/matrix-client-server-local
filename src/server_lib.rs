@@ -67,7 +67,7 @@ impl Server {
 
             let mut __guard_total = stats::TimeGuard::new("Total");
 
-            let matrix = {
+            let matrix = { // Read Matrix from shared memory
                 let mut __guard = stats::TimeGuard::new("CopyIn");
                 let matrix = Matrix::<f64>::from_buffer(shared_buffer.payload);
 
@@ -89,36 +89,7 @@ impl Server {
                 matrix.transpose_parallel(64)
             };
 
-            {
-                let __guard = stats::TimeGuard::new(
-                    format!("Transpose_par_128_{}x{}", matrix.rows(), matrix.cols()).as_str()
-                );
-                matrix.transpose_parallel(128)
-            };
-
-            {
-                let __guard = stats::TimeGuard::new(
-                    format!("Transpose_par_256_{}x{}", matrix.rows(), matrix.cols()).as_str()
-                );
-                matrix.transpose_parallel(256)
-            };
-
-            {
-                let __guard = stats::TimeGuard::new(
-                    format!("Transpose_par_512_{}x{}", matrix.rows(), matrix.cols()).as_str()
-                );
-                matrix.transpose_parallel(512)
-            };
-
-            {
-                let __guard = stats::TimeGuard::new(
-                    format!("Transpose_seq_{}x{}", matrix.rows(), matrix.cols()).as_str()
-                );
-                matrix.transpose();
-            };
-
-            // Write the result back into shared memory
-            {
+            { // Write the result back into shared memory
                 let __guard = stats::TimeGuard::new("CopyOut");
                 transpose.to_buffer(shared_buffer.payload);
                 shared_buffer.notify();
@@ -244,7 +215,7 @@ mod stats {
         }
     }
 
-    /// The RefCell cntains a hash map with the times information.
+    // The RefCell cntains a hash map with the times information.
     thread_local! {
         static THREAD_INFO: RefCell<ThreadInfo>
         = RefCell::new(ThreadInfo {times_map: HashMap::new()});

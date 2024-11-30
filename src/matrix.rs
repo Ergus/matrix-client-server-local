@@ -556,7 +556,7 @@ mod tests {
 
 
     #[test]
-    fn test_matrix_transpose_big_parallel()
+    fn test_matrix_transpose_big_parallel_high()
     {
         let matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
         assert!(matrix.validate());
@@ -567,6 +567,23 @@ mod tests {
         // Verify all elements
         for i in 0..512 {
             for j in 0..256 {
+                assert_eq!(matrix.get(i, j), transposed.get(j, i));
+            }
+        }
+    }
+
+    #[test]
+    fn test_matrix_transpose_big_parallel_width()
+    {
+        let matrix = Matrix::from_fn(256, 512, |i, j| i * 512 + j);
+        assert!(matrix.validate());
+
+        let transposed = matrix.transpose_parallel(64);
+        assert!(transposed.validate());
+
+        // Verify all elements
+        for i in 0..256 {
+            for j in 0..512 {
                 assert_eq!(matrix.get(i, j), transposed.get(j, i));
             }
         }

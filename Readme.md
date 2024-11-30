@@ -190,6 +190,17 @@ server given by the OS.
    
 4. This doesn't have a robust error handling on the server or client
    to manage peer disconnections.
+   
+5. The synchronization method is very primitive. For more messages we
+   can just change the bool flag with an integer value and perform
+   different actions for every value. This can be simply implemented,
+   but I think it is not the main interest for the assignment.
+   
+6. There are unit tests only in the Matrix API. Without external tools
+   is a bit complicated to test server-client apis. And it doesn't
+   worth reinventing the well
 
-I spend about 2 days (Thursday: made it work, 1/2 Friday:
-Optimization, 1/2 Saturday: Readme, testing and optimizing a bit more)
+I spend about 2.5 days.
+1 Thursday: made the parts until work,
+1/2 Friday: Optimization and parallelization,
+1 Saturday: Readme, testing and optimize details, improve the statistics and outputs

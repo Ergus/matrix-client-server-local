@@ -124,12 +124,6 @@ fn main() -> nix::Result<()>
 
         let transpose = tmp.expect("Error").transpose();
 
-        // println!("Received:");
-        // print!("{}", received);
-
-        // println!("transpose:");
-        // print!("{}", transpose);
-
         println!("Received!");
 
         if received != transpose {

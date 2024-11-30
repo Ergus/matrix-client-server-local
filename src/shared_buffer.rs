@@ -35,7 +35,7 @@ use std::ffi::{c_void, CString};
 /// 6. The sets the flag to false again
 #[derive(Debug, Clone)]
 pub struct SharedBuffer<'a> {
-    shm_name: String,
+    // shm_name: String,
     shm_full_size: usize,
     is_client: bool,
     shm_fd: RawFd,
@@ -82,7 +82,7 @@ impl SharedBuffer<'_> {
 
         ready_flag.store(false, Ordering::SeqCst);
 
-        Ok(Self { shm_name, shm_full_size, is_client, shm_fd, ptr, ready_flag, payload})
+        Ok(Self { shm_full_size, is_client, shm_fd, ptr, ready_flag, payload})
     }
 
     /// Change the flag value to notify the peer.

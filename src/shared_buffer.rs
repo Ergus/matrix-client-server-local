@@ -36,6 +36,7 @@ use std::ffi::{c_void, CString};
 #[derive(Debug, Clone)]
 pub struct SharedBuffer<'a> {
     // shm_name: String,
+    id: u64,
     shm_full_size: usize,
     is_client: bool,
     shm_fd: RawFd,
@@ -82,7 +83,19 @@ impl SharedBuffer<'_> {
 
         ready_flag.store(false, Ordering::SeqCst);
 
-        Ok(Self { shm_full_size, is_client, shm_fd, ptr, ready_flag, payload})
+        Ok(Self { id, shm_full_size, is_client, shm_fd, ptr, ready_flag, payload})
+    }
+
+    /// Get the buffer id (same as client id)
+    pub fn id(&self) -> u64
+    {
+        self.id
+    }
+
+    /// Get the number of 64 bits entries in the payload
+    pub fn n_elements(&self) -> usize
+    {
+        (self.shm_full_size - 8) / 8
     }
 
     /// Change the flag value to notify the peer we are done.

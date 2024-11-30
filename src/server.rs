@@ -14,7 +14,7 @@ fn main() -> nix::Result<()> {
                         Ok(mut shared_buffer) => {
                             let _ = write(client_fd, &id.to_be_bytes());
                             let _ = Server::server_thread(&mut shared_buffer);
-                            println!("Client finished and disconnected...");
+                            println!("Client: {} finished and disconnected...", shared_buffer.id());
                         }
                         Err(err) => {
                             let _ = write(client_fd, &0_u64.to_be_bytes());

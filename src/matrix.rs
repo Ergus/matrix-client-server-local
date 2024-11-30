@@ -1,8 +1,7 @@
-use std::{ptr, fmt, cmp};
+use std::{ptr,cmp};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ffi::c_void;
-use std::fmt::Debug;
 
 use rand::Rng;
 use rand::distributions::Standard;
@@ -23,7 +22,7 @@ macro_rules! implement_numeric64 {
 /// needs to be 64 bits.
 pub trait Numeric64: 
     Sized + 
-    Debug + 
+    std::fmt::Debug + 
     Copy +
     PartialEq + 
     PartialOrd +
@@ -519,9 +518,9 @@ impl<T: std::cmp::PartialEq> PartialEq<Matrix<T>> for Matrix<T> {
 
 
 /// Helper for print
-impl<T: std::fmt::Debug> fmt::Display for Matrix<T> {
+impl<T: std::fmt::Debug> std::fmt::Display for Matrix<T> {
 
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 
         let rguard = self.data.read().unwrap();
 

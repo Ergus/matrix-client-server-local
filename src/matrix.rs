@@ -6,31 +6,43 @@ use rand::prelude::Distribution;
 use std::ffi::c_void;
 
 use std::sync::{Arc, RwLock};
+use std::fmt::Debug;
 
-/// A trait to approximate "numeric types".
-pub trait Numeric: std::ops::Add<Output = Self> 
-                 + std::ops::Sub<Output = Self> 
-                 + std::ops::Mul<Output = Self> 
-                 + std::ops::Div<Output = Self> 
-                 + Copy
-                 + Send
-                 + Sync
-                 + Clone
-                 + Default
-                 + std::fmt::Debug
-                 + 'static {}
+macro_rules! implement_numeric64 {
+    ($($t:ty),*) => {
+        $(
+            impl Numeric64 for $t {
+                fn zero() -> Self { 0 }
+                fn one() -> Self { 1 }
+            }
+        )*
+    }
+}
 
-impl<T> Numeric for T where T: std::ops::Add<Output = T> 
-                             + std::ops::Sub<Output = T> 
-                             + std::ops::Mul<Output = T> 
-                             + std::ops::Div<Output = T> 
-                             + Copy
-                             + Send
-                             + Sync
-                             + Clone
-                             + Default
-                             + std::fmt::Debug
-                             + 'static {}
+// Trait definition remains the same
+pub trait Numeric64: 
+    Sized + 
+    Debug + 
+    Copy +
+    PartialEq + 
+    PartialOrd +
+    Default +
+    Send +
+    Sync +
+    std::ops::Sub<Output = Self> +
+    'static 
+{
+    fn zero() -> Self;
+    fn one() -> Self;
+}
+
+// Implement for multiple types in one go
+implement_numeric64!(i64, u64, isize, usize, i128);
+
+impl Numeric64 for f64 {
+    fn zero() -> Self { 0.0 }
+    fn one() -> Self { 1.0 }
+}
 
 #[derive(Debug, Clone)]
 pub struct Matrix<T> {
@@ -41,7 +53,7 @@ pub struct Matrix<T> {
 
 impl<T> Matrix<T>
 where
-    T: Numeric, Standard: Distribution<T>
+    T: Numeric64, Standard: Distribution<T>
 {
     const BLOCKDIM: usize = 64;  // This si a simple empiric value, we may tune it.
 
@@ -71,7 +83,7 @@ where
         Self { rows, cols, data }
     }
 
-    /// Useful for the tests bellow
+    /// Function to generate the random matrices
     pub fn random(rows: usize, cols: usize) -> Self
     {
         let mut rng = rand::thread_rng();
@@ -81,6 +93,8 @@ where
         Self { rows, cols, data}
     }
 
+    /// Copy the matrix from a memory buffer. Generally used to copy
+    /// from shared memory
     pub fn from_buffer(buffer: *const c_void) -> Self
     {
         let rows: usize = unsafe { *(buffer as *const usize) };
@@ -113,7 +127,8 @@ where
         }
     }
 
-    /// Very primitive serialization function
+    /// Very primitive serialization function. Generally used to copy
+    /// To shared memory
     pub fn to_buffer(&self, buffer: *mut c_void)
     {
         unsafe {
@@ -162,7 +177,6 @@ where
 
         rguard.iter().all(f)
     }
-
 
     fn copy_to_block(&self, block: &mut Matrix<T>, row_block: usize, col_block: usize)
     {
@@ -223,7 +237,8 @@ where
         }
     }
 
-    /// Full transpose in place for small matrices (intended to happen in the cache)
+    /// Full transpose in place for small matrices (intended to happen
+    /// in the cache)
     fn transpose_small_square_inplace(&mut self)
     {
         assert_eq!(self.rows, self.cols, "Small transpose must be squared");
@@ -240,7 +255,8 @@ where
         }
     }
 
-    /// Full transpose in place for small matrices (intended to happen in the cache)
+    /// Full transpose in place for small matrices (intended to happen
+    /// in the cache)
     fn transpose_small_rectangle(&self) -> Matrix<T>
     {
         assert!(self.rows <= 64, "Small rectangle tranpose rows must not exceed 64");
@@ -407,7 +423,7 @@ mod tests {
     #[test]
     fn test_matrix_constructor()
     {
-        let matrix = Matrix::<i32>::new(3, 4);
+        let matrix = Matrix::<i64>::new(3, 4);
 
         // Verify dimensions
         assert_eq!(matrix.rows(), 3);

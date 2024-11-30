@@ -173,28 +173,23 @@ where
         let col_end: usize = (col_block + block.cols()).min(self.cols);
         let copysize: usize = col_end - col_block;
 
-        {
-            let rguard = self.data.read().unwrap();
-            let mut wguard_block = block.data.write().unwrap();
+        let src: *const T = self.data.read().unwrap().as_ptr();
+        let dst: *mut T = block.data.write().unwrap().as_mut_ptr();
 
-            let src: *const T = rguard.as_ptr();
-            let dst: *mut T = wguard_block.as_mut_ptr();
+        let mut startdst: usize = 0;
 
-            let mut startdst: usize = 0;
+        // Copy from matrix to blocks
+        for row in row_block..row_end {
 
-            // Copy from matrix to blocks
-            for row in row_block..row_end {
-
-                unsafe {
-                    // Efficient vectorized copy (~memcpy)
-                    ptr::copy_nonoverlapping(
-                        src.add(row * self.cols + col_block),
-                        dst.add(startdst),
-                        copysize);
-                }
-
-                startdst += block.cols();
+            unsafe {
+                // Efficient vectorized copy (~memcpy)
+                ptr::copy_nonoverlapping(
+                    src.add(row * self.cols + col_block),
+                    dst.add(startdst),
+                    copysize);
             }
+
+            startdst += block.cols();
         }
     }
 
@@ -209,29 +204,23 @@ where
         let col_end: usize = (col_block + block.cols()).min(self.cols);
         let copysize: usize = col_end - col_block;
 
-        {
-            let mut wguard = self.data.write().unwrap();
-            let rguard_block = block.data.read().unwrap();
+        let src: *mut T = self.data.write().unwrap().as_mut_ptr();
+        let dst: *const T = block.data.read().unwrap().as_ptr();
 
+        let mut startdst: usize = 0;
 
-            let src: *mut T = wguard.as_mut_ptr();
-            let dst: *const T = rguard_block.as_ptr();
+        // Copy from matrix to blocks
+        for row in row_block..row_end {
 
-            let mut startdst: usize = 0;
-
-            // Copy from matrix to blocks
-            for row in row_block..row_end {
-
-                unsafe {
-                    // Efficient vectorized copy (~memcpy)
-                    ptr::copy_nonoverlapping(
-                        dst.add(startdst),
-                        src.add(row * self.cols + col_block),
-                        copysize);
-                }
-
-                startdst += block.cols();
+            unsafe {
+                // Efficient vectorized copy (~memcpy)
+                ptr::copy_nonoverlapping(
+                    dst.add(startdst),
+                    src.add(row * self.cols + col_block),
+                    copysize);
             }
+
+            startdst += block.cols();
         }
     }
 

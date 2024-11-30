@@ -169,7 +169,6 @@ where
         //assert_eq!(block.rows, block.cols, "block must be squared");
 
         let row_end: usize = (row_block + block.rows()).min(self.rows);
-
         let col_end: usize = (col_block + block.cols()).min(self.cols);
         let copysize: usize = col_end - col_block;
 
@@ -225,7 +224,7 @@ where
     }
 
     /// Full transpose in place for small matrices (intended to happen in the cache)
-    fn transpose_small_square(&mut self)
+    fn transpose_small_square_inplace(&mut self)
     {
         assert_eq!(self.rows, self.cols, "Small transpose must be squared");
 
@@ -263,19 +262,6 @@ where
         transpose
     }
 
-
-    // fn transpose_by_two_inplace(&mut self, row_block: usize, col_block: usize)
-    // {
-    //     let mut block1 = Matrix::<T>::new(blocksize, blocksize);
-    //     let mut block2 = Matrix::<T>::new(blocksize, blocksize);
-
-    //     self.copy_to_block(&mut block1, row_block, col_block);
-    //     block1.transpose_small_square();
-
-    //     self.copy_to_block(&mut block2, col_block, row_block);
-
-    // }
-
     // Transpose
     pub fn transpose_big(&self, blocksize: usize) -> Matrix<T>
     {
@@ -287,7 +273,7 @@ where
             for col_block in (0..self.cols).step_by(blocksize) {
 
                 self.copy_to_block(&mut block, row_block, col_block);
-                block.transpose_small_square();
+                block.transpose_small_square_inplace();
                 transposed.copy_from_block(&block, col_block, row_block);
             }
         }
@@ -302,7 +288,7 @@ where
 
         let transposed = Matrix::<T>::new(self.cols, self.rows);
 
-        let cols_blocks = self.rows / blocksize;
+        let cols_blocks = self.cols / blocksize;
 
         let cols_blocks_per_thread = cols_blocks / n_threads;
 
@@ -311,7 +297,6 @@ where
         std::thread::scope(|s| {
 
             for i in 0..n_threads {
-
 
                 let cself = self.clone();
                 let mut ctran = transposed.clone();
@@ -330,7 +315,7 @@ where
                         for row in (0..cself.rows).step_by(blocksize) {
 
                             cself.copy_to_block(&mut block, row, col);
-                            block.transpose_small_square();
+                            block.transpose_small_square_inplace();
 
                             ctran.copy_from_block(&block, col, row);
                         }
@@ -453,7 +438,7 @@ mod tests {
     {
         let mut matrix = Matrix::from_fn(8, 8, |i, j| i * 8 + j);
 
-        matrix.transpose_small_square();
+        matrix.transpose_small_square_inplace();
 
         // Verify all elements
         for i in 0..8 {
@@ -559,6 +544,24 @@ mod tests {
         assert!(matrix.validate());
 
         let transposed = matrix.transpose_big(64);
+        assert!(transposed.validate());
+
+        // Verify all elements
+        for i in 0..512 {
+            for j in 0..256 {
+                assert_eq!(matrix.get(i, j), transposed.get(j, i));
+            }
+        }
+    }
+
+
+    #[test]
+    fn test_matrix_transpose_big_parallel()
+    {
+        let matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
+        assert!(matrix.validate());
+
+        let transposed = matrix.transpose_parallel(64);
         assert!(transposed.validate());
 
         // Verify all elements

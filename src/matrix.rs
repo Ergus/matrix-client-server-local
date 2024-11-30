@@ -547,8 +547,9 @@ mod tests {
         // Verify dimensions
         assert_eq!(matrix.rows(), 3);
         assert_eq!(matrix.cols(), 4);
+        assert_eq!(matrix.datalen(), 4 * 3);
 
-        // Verify all elements
+        // Verify all elements are zero
         for i in 0..3 {
             for j in 0..4 {
                 assert_eq!(matrix.get(i, j), 0);
@@ -560,9 +561,9 @@ mod tests {
     fn test_matrix_debug()
     {
         let matrix = Matrix::from_fn(2, 2, |i, j| i * j);
+        let debug_output = format!("{:?}", matrix);
 
         // Ensure debug string is as expected
-        let debug_output = format!("{:?}", matrix);
         assert!(debug_output.contains("Matrix"));
         assert!(debug_output.contains("data:"));
     }
@@ -572,7 +573,6 @@ mod tests {
     fn test_matrix_transpose_small_square_inplace()
     {
         let mut matrix = Matrix::from_fn(8, 8, |i, j| i * 8 + j);
-
         matrix.transpose_small_square_inplace();
 
         // Verify all elements
@@ -587,7 +587,6 @@ mod tests {
     fn test_matrix_transpose_small_rectangle()
     {
         let matrix = Matrix::from_fn(16, 8, |i, j| i * 8 + j);
-
         let out = matrix.transpose_small_rectangle();
 
         // Verify all elements
@@ -613,13 +612,12 @@ mod tests {
         }
     }
 
-
     #[test]
-    fn test_matrix_from_block()
+    fn test_matrix_from_to_block()
     {
-
         let mut matrix = Matrix::<usize>::new(64, 64);
 
+        // Initialize the blocks and copy them to the main matrix
         for i in 0..8 {
             for j in 0..8 {
                 let block = Matrix::from_fn(8, 8, |_, _| (i * 8 + j));
@@ -631,6 +629,8 @@ mod tests {
 
         let mut block = Matrix::<usize>::new(8, 8);
 
+        // Retrieve the blocks back and check (copy_to_block is
+        // already tested, so I thrust it)
         for i in 0..8 {
             for j in 0..8 {
                 matrix.copy_to_block(&mut block, i * 8, j * 8);
@@ -639,123 +639,76 @@ mod tests {
         }
     }
 
+    fn test_matrix_transpose<F>(test_fun: F, rows: usize, cols: usize)
+    where
+       F: Fn(&Matrix<usize>, usize) -> Matrix<usize>
+    {
+        let matrix = Matrix::from_fn(rows, cols, |i, j| i * cols + j);
+        assert!(matrix.validate());
+
+        let transposed = test_fun(&matrix, 64);
+        assert!(transposed.validate());
+
+        // Verify all elements
+        for i in 0..rows {
+            for j in 0..cols {
+                assert_eq!(matrix.get(i, j), transposed.get(j, i));
+            }
+        }
+    }
+
+
     #[test]
     fn test_matrix_transpose_big_squared()
     {
-        let matrix = Matrix::from_fn(512, 512, |i, j| i * 512 + j);
-        assert!(matrix.validate());
-
-        let transposed = matrix.transpose_big(64);
-        assert!(transposed.validate());
-
-        // Verify all elements
-        for i in 0..512 {
-            for j in 0..512 {
-                assert_eq!(transposed.get(i, j), matrix.get(j, i));
-            }
-        }
+        test_matrix_transpose(Matrix::<usize>::transpose_big, 512, 512);
     }
 
     #[test]
-    fn test_matrix_transpose_big_random()
+    fn test_matrix_transpose_big_heigh()
     {
-        let matrix = Matrix::<f64>::random(512, 1024);
-        assert!(matrix.validate());
-
-        let transposed = matrix.transpose_big(64);
-
-        // Verify all elements
-        for i in 0..512 {
-            for j in 0..1024 {
-                assert_eq!(matrix.get(i, j), transposed.get(j, i));
-            }
-        }
+        test_matrix_transpose(Matrix::<usize>::transpose_big, 512, 128);
     }
 
     #[test]
-    fn test_matrix_transpose_big_rectangular()
+    fn test_matrix_transpose_big_width()
     {
-        let matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
-        assert!(matrix.validate());
-
-        let transposed = matrix.transpose_big(64);
-        assert!(transposed.validate());
-
-        // Verify all elements
-        for i in 0..512 {
-            for j in 0..256 {
-                assert_eq!(matrix.get(i, j), transposed.get(j, i));
-            }
-        }
+        test_matrix_transpose(Matrix::<usize>::transpose_big, 512, 128);
     }
-
 
     #[test]
     fn test_matrix_transpose_big_parallel_static_high()
     {
-        let matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
-        assert!(matrix.validate());
-
-        let transposed = matrix.transpose_parallel_static(64);
-        assert!(transposed.validate());
-
-        // Verify all elements
-        for i in 0..512 {
-            for j in 0..256 {
-                assert_eq!(matrix.get(i, j), transposed.get(j, i));
-            }
-        }
+        test_matrix_transpose(
+            Matrix::<usize>::transpose_parallel_static,
+            512, 256
+        );
     }
 
     #[test]
     fn test_matrix_transpose_big_parallel_static_width()
     {
-        let matrix = Matrix::from_fn(256, 512, |i, j| i * 512 + j);
-        assert!(matrix.validate());
-
-        let transposed = matrix.transpose_parallel_static(64);
-        assert!(transposed.validate());
-
-        // Verify all elements
-        for i in 0..256 {
-            for j in 0..512 {
-                assert_eq!(matrix.get(i, j), transposed.get(j, i));
-            }
-        }
+        test_matrix_transpose(
+            Matrix::<usize>::transpose_parallel_static,
+            256, 512
+        );
     }
 
     #[test]
     fn test_matrix_transpose_big_parallel_dynamic_high()
     {
-        let matrix = Matrix::from_fn(512, 256, |i, j| i * 512 + j);
-        assert!(matrix.validate());
-
-        let transposed = matrix.transpose_parallel_dynamic(64);
-        assert!(transposed.validate());
-
-        // Verify all elements
-        for i in 0..512 {
-            for j in 0..256 {
-                assert_eq!(matrix.get(i, j), transposed.get(j, i));
-            }
-        }
+        test_matrix_transpose(
+            Matrix::<usize>::transpose_parallel_dynamic,
+            512, 256
+        );
     }
 
     #[test]
     fn test_matrix_transpose_big_parallel_dynamic_width()
     {
-        let matrix = Matrix::from_fn(256, 512, |i, j| i * 512 + j);
-        assert!(matrix.validate());
-
-        let transposed = matrix.transpose_parallel_dynamic(64);
-        assert!(transposed.validate());
-
-        // Verify all elements
-        for i in 0..256 {
-            for j in 0..512 {
-                assert_eq!(matrix.get(i, j), transposed.get(j, i));
-            }
-        }
+        test_matrix_transpose(
+            Matrix::<usize>::transpose_parallel_static,
+            256, 512
+        );
     }
-
 }

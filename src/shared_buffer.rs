@@ -10,6 +10,29 @@ use std::os::unix::io::RawFd;
 use crate::Matrix;
 use std::ffi::{c_void, CString};
 
+/// A class to perform matrix interchange between processes.
+///
+/// This buffer uses shared memory as the mos efficient IPC within a
+/// node.  I use socket communication only for the initial connection.
+/// After that initial "sync" the Server creates an instance of this
+/// class and all the following communications between the two processes
+/// use this shared memory region which is more than two times faster.
+///
+/// Using shared memory also avoids the bottle neck in the socket when
+/// more than one client is connected.
+/// 
+/// The communicatio process is pretty simple. There is an atomic
+/// memory region in the beginning of the buffer (ready_flag).
+///
+/// 0. When the server receives a connection request (in the socket).
+///    It creates a new thread and that thread attempts to construct this buffer.
+/// 1. The server's thread initializes the flag to FALSE after the reserve.
+/// 2. Then informs the client (using the socket)
+/// 3. The client with the id information creates a "mirror" buffer sharing the memory.
+/// 4. The client sets the information in the payload and sets the flag to TRUE.
+/// 5. When the server's thread finds that the flag is on true. It starts the
+///    read process and writes back the information in the same place when done.
+/// 6. The sets the flag to false again
 #[derive(Debug, Clone)]
 pub struct SharedBuffer<'a> {
     shm_name: String,
@@ -24,6 +47,9 @@ pub struct SharedBuffer<'a> {
 impl SharedBuffer<'_> {
 
     /// Constructor
+    ///
+    /// The constructor reserves a shared memory region and assumes
+    /// and initializes
     pub fn new(is_client: bool, id: u64, payload_size: usize) -> nix::Result<Self>
     {
         let shm_name: String = format!("/rust_ipc_shm_{}", id);
@@ -59,18 +85,20 @@ impl SharedBuffer<'_> {
         Ok(Self { shm_name, shm_full_size, is_client, shm_fd, ptr, ready_flag, payload})
     }
 
+    /// Change the flag value to notify the peer.
     pub fn notify(&self)
     {
         self.ready_flag.store(self.is_client, Ordering::SeqCst);
     }
 
-    // TODO: Error handling
+    /// Effectively write the matrix to the shared payload
     pub fn send(&self, matrix: &Matrix<f64>)
     {
         matrix.to_buffer(self.payload);
         self.notify();
     }
 
+    /// Pooling check the flag value for replies.
     pub fn wait_response(&self)
     {
         while self.ready_flag.load(Ordering::SeqCst) == self.is_client {
@@ -78,6 +106,7 @@ impl SharedBuffer<'_> {
         }
     }
 
+    /// Effectively read the matrix from the shared payload
     pub fn receive(&mut self) -> Matrix<f64>
     {
         Matrix::<f64>::from_buffer(self.payload)

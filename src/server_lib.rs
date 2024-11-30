@@ -7,6 +7,10 @@ use std::os::fd::RawFd;
 
 use crate::{Matrix, SharedBuffer};
 
+/// A server class to construct from server instances.
+///
+/// This only stores the counter (to get tracks of the unique ids) and
+/// the file descriptor for the socket connection
 pub struct Server {
     counter: u64,
     fd: RawFd,
@@ -44,6 +48,14 @@ impl Server {
         Self { counter: 0,  fd}
     }
 
+    /// Main thread server function
+    ///
+    /// This function is the action spawned in the server side for
+    /// every client.
+    ///
+    /// The function basically performs the
+    /// check-read-traspose-write-notify in the shared buffer.
+    /// See: [`SharedBuffer`] - Link to a type
     pub fn server_thread(shared_buffer: &mut SharedBuffer) -> nix::Result<()>
     {
         // Clear the ready flag
@@ -116,7 +128,10 @@ impl Server {
         Ok(())
     }
 
-    /// This is not "elegant" to return a tuple, but it is simple enough
+    /// Function to wait for new connections. This is basically the
+    /// place where the server `main' is most of the time
+    ///
+    ///This is not "elegant" to return a tuple, but it is simple enough
     pub fn wait_client(&mut self) -> nix::Result<(RawFd, u64, u64)>
     {
         let mut buf = [0u8; 8];
@@ -156,7 +171,10 @@ impl Drop for Server {
     }
 }
 
-
+/// A client class to construct from client instances.
+///
+/// Only stores the id (receivef from the server) and the shared
+/// buffer (constructed from it)
 pub struct Client<'a> {
     pub id: u64,
     pub shared_buffer: SharedBuffer<'a>,
@@ -164,6 +182,10 @@ pub struct Client<'a> {
 
 impl Client<'_> {
 
+    /// Constructor
+    ///
+    /// Basically opens a socket connection and writes to the server asking for an id.
+    /// The id number is used to construct a shared buffer.
     pub fn new(payload_size: u64) -> Self
     {
         // Create the socket
@@ -199,6 +221,12 @@ impl Client<'_> {
 
 }
 
+/// A class to collect statistics
+///
+/// This can be tunned, but in general shows the main times at the end
+/// of every connection.
+/// The stats are stored as thread local information and the
+/// information gets printed when the thread_local destructor is called
 mod stats {
 
     use std::time::Instant;
@@ -216,13 +244,13 @@ mod stats {
         }
     }
 
+    /// The RefCell cntains a hash map with the times information.
     thread_local! {
-
         static THREAD_INFO: RefCell<ThreadInfo>
         = RefCell::new(ThreadInfo {times_map: HashMap::new()});
     }
 
-    /// Use a time guard to collect times easier
+    /// Use a time guard to collect times easier with RAII.
     pub struct TimeGuard {
         enabled: bool,
         key: String,
@@ -258,6 +286,7 @@ mod stats {
         }
     }
 
+    /// Process an stats vector (times) and return a simple tuple with the statistics
     fn get_stats(timesvec: &Vec<u128> ) -> (usize, f64, u128, u128, u128) {
         let sum: u128 = timesvec.iter().sum(); // Sum of all elements
         let count = timesvec.len();    // Convert to f64 for division
@@ -270,6 +299,9 @@ mod stats {
         (count, avg, min, max, sum)
     }
 
+    /// Print the statistics.
+    ///
+    /// This function is called in the THREAD_INFO destructor.
     fn print_stats(map: &HashMap<String, Vec<u128>>)
     {
         let (tcount, tavg, tmin, tmax, tsum) = get_stats(map.get("Total").expect("Missing Total stats"));

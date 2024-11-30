@@ -19,7 +19,8 @@ macro_rules! implement_numeric64 {
     }
 }
 
-// Trait definition remains the same
+/// A trait is to enforce the exercise order. It says that the type
+/// needs to be 64 bits.
 pub trait Numeric64: 
     Sized + 
     Debug + 
@@ -39,6 +40,7 @@ pub trait Numeric64:
 // Implement for multiple types in one go
 implement_numeric64!(i64, u64, isize, usize, i128);
 
+/// Handle f64 individually
 impl Numeric64 for f64 {
     fn zero() -> Self { 0.0 }
     fn one() -> Self { 1.0 }
@@ -46,25 +48,42 @@ impl Numeric64 for f64 {
 
 #[derive(Debug, Clone)]
 pub struct Matrix<T> {
+    /// Number of rows
     rows: usize,
+
+    /// Number of columns
     cols: usize,
+
+    /// The matrix data stored in an Arc
     data: Arc<RwLock<Vec<T>>>,
 }
 
+
+/// A matrix class of 64 bits numbers.
+///
+/// The main purpose of this si to simplify and encapsulate the
+/// transposition matrix operations
+///
+/// The class includes multiple transpositions functions specialized
+/// for bigger and smaller dimensions.
+///
+/// The main function to use in the final application may be the
+/// parallel version.
 impl<T> Matrix<T>
 where
     T: Numeric64, Standard: Distribution<T>
 {
     const BLOCKDIM: usize = 64;  // This si a simple empiric value, we may tune it.
 
-    /// Constructor
+    /// Basic constructor to create an empty matrix
     pub fn new(rows: usize, cols: usize) -> Self {
         let data = Arc::new(RwLock::new(vec![T::default(); rows * cols]));
 
         Self { rows, cols, data }
     }
 
-    /// Useful for the tests bellow
+    /// Constructor to generate the matrix based on an iteration function.
+    /// This is specially useful for the tests
     pub fn from_fn<F>(rows: usize, cols: usize, mut f: F) -> Self
     where
         F: FnMut(usize, usize) -> T,
@@ -83,7 +102,8 @@ where
         Self { rows, cols, data }
     }
 
-    /// Function to generate the random matrices
+    /// Function to generate the random matrices.
+    /// This is the function used in the client
     pub fn random(rows: usize, cols: usize) -> Self
     {
         let mut rng = rand::thread_rng();
@@ -155,17 +175,20 @@ where
         self.cols
     }
 
-    /// Get Cols
+    /// Get the total number of elements in the matrix.
+    /// Just syntax sugar.
     pub fn datalen(&self) -> usize {
         self.cols * self.rows
     }
 
-
-    /// gcd is the min because we assume 2^n x 2^m matrices
+    /// To get the gcd we only use is the min because we assume 2^n x
+    /// 2^m matrices. Otherwise we need to implement the gcd code.
     fn gcd(&self) -> usize {
         cmp::min(self.rows, self.cols)
     }
 
+    /// This function returns the total sizze required to serialize
+    /// the Matrix in a payload (buffer of contiguous memory)
     pub fn payload_size(&self) -> usize
     {
         2 * size_of::<usize>() + self.datalen() * size_of::<f64>()
@@ -178,6 +201,7 @@ where
         rguard.iter().all(f)
     }
 
+    /// Serialize the Matrix to a payload (buffer of contiguous memory)
     fn copy_to_block(&self, block: &mut Matrix<T>, row_block: usize, col_block: usize)
     {
         //assert_eq!(block.rows, block.cols, "block must be squared");
@@ -206,6 +230,7 @@ where
         }
     }
 
+    /// Deserialize the matrix from a payload (buffer of contiguous memory)
     fn copy_from_block(&mut self, block: &Matrix<T>, row_block: usize, col_block: usize)
     {
         assert_eq!(block.rows, block.cols, "Block must be squared");
@@ -237,8 +262,10 @@ where
         }
     }
 
-    /// Full transpose in place for small matrices (intended to happen
-    /// in the cache)
+    /// Full transpose in place for small matrices
+
+    /// This function is used on the blocks to transpose inplace. As
+    /// the blocks are "small" this is intended to happen in the cache.
     fn transpose_small_square_inplace(&mut self)
     {
         assert_eq!(self.rows, self.cols, "Small transpose must be squared");
@@ -255,8 +282,7 @@ where
         }
     }
 
-    /// Full transpose in place for small matrices (intended to happen
-    /// in the cache)
+    /// Full transpose for small matrices without blocks.
     fn transpose_small_rectangle(&self) -> Matrix<T>
     {
         assert!(self.rows <= 64, "Small rectangle tranpose rows must not exceed 64");
@@ -278,7 +304,7 @@ where
         transpose
     }
 
-    // Transpose
+    /// Full transpose for big matrices with blocks, but without threads.
     pub fn transpose_big(&self, blocksize: usize) -> Matrix<T>
     {
         let mut transposed = Matrix::<T>::new(self.cols, self.rows);
@@ -297,6 +323,7 @@ where
         transposed
     }
 
+    /// Full transpose for big matrices with blocks and threads.
     pub fn transpose_parallel(&self, blocksize: usize) -> Matrix<T>
     {
         // TODO: Improve this
@@ -345,7 +372,8 @@ where
 
     }
 
-    /// This is a simple heuristic, we may tune it 
+    /// This is a simple heuristic to decide when to use the
+    /// un-blocked version, we may tune it.
     fn is_small_enough(&self) -> bool
     {
         self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM
@@ -353,6 +381,11 @@ where
             || self.rows < Self::BLOCKDIM
     }
 
+    /// This is intended to become the main function to use in the
+    /// server code.
+    ///
+    /// # TODO
+    /// Still needs improve the heuristics
     pub fn transpose(&self) -> Matrix<T>
     {
         if self.is_small_enough() {
@@ -362,13 +395,21 @@ where
         self.transpose_big(Self::BLOCKDIM)
     }
 
+    /// Get a matrix value using copy.
     pub fn get(&self, row: usize, col: usize) -> T
     {
         let rguard = self.data.read().unwrap();
         rguard[row * self.cols + col]
     }
 
-
+    /// Substract two matrices and obtain another matrix.
+    ///
+    /// We didn't implement the trait sub because the prototype is not
+    /// good enough for efficiency.
+    ///
+    /// # Purpose
+    /// This function is used in debug mode in the client to check
+    /// differences in case of error.
     pub fn sub(&self, other: &Matrix<T>) -> Matrix<T> {
 
         assert_eq!(self.rows, other.rows);

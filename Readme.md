@@ -160,20 +160,20 @@ server given by the OS.
    all of them try to write back it's block after every block
    transpose.
    
+4. The matrix internally can store the data in a Vector or just use a
+   Slice to access buffered data. This is a new optimization to avoid
+   one of the copies from shared memory to local.
+   
+5. The `to_buffer` method now includes an heuristic to parallelize IO
+   for big matrices. There is a new function `to_buffer_parallel` that
+   Implements a fixed data IO operation in parallel.
+   
+6. Now the client pre-computes also the transposes in order to stress
+   more the server, but keep checking correctness.
+   
 ## Known issues
 
-1. The current code performs 3 memory copies. From shared memory to
-   main memory, from main to transposed and from transposed to shared.
-   
-   One of these copies could be removed by using another matrix class
-   where data is a slice instead of a vector.
-   
-   However, the trade of here is that access to shared memory is more
-   expensive, so multi-thread access to it in non-contiguous accesses
-   (by blocks) either reading or writing may not give a performance
-   boost we expect.
-   
-2. The number of threads in the parallel transposition may produce
+1. The number of threads in the parallel transposition may produce
    over-subscription when there are many clients connected.
    
    The right approach involves using a thread pool and to deliver
@@ -185,18 +185,18 @@ server given by the OS.
    ``computation'' is creating threads at the time, but not blocking
    other operations like copy from/to memory.
    
-3. The stats are collected by thread-client not globally because I
+2. The stats are collected by thread-client not globally because I
    thing it is more useful in that way.
    
-4. This doesn't have a robust error handling on the server or client
+3. This doesn't have a robust error handling on the server or client
    to manage peer disconnections.
    
-5. The synchronization method is very primitive. For more messages we
+4. The synchronization method is very primitive. For more messages we
    can just change the bool flag with an integer value and perform
    different actions for every value. This can be simply implemented,
    but I think it is not the main interest for the assignment.
    
-6. There are unit tests only in the Matrix API. Without external tools
+5. There are unit tests only in the Matrix API. Without external tools
    is a bit complicated to test server-client apis. And it doesn't
    worth reinventing the well
 

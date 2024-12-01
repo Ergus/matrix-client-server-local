@@ -1,7 +1,7 @@
 use std::{env,mem};
 use std::sync::{Arc, Mutex};
 
-use rand::prelude::SliceRandom;
+use rand::Rng; // Import the Rng trait
 
 use irreducible::{Matrix, Client};
 
@@ -95,6 +95,8 @@ fn main() -> nix::Result<()>
     println!("Initializing matrices");
     let data = init_matrix_set(set_size, rows, cols);
 
+    let transposes = data.iter().map(|box_ref| box_ref.transpose()).collect::<Vec<_>>();
+
     let payload_size: u64 = data.first().expect("The data array is empty?").payload_size() as u64;
 
     println!("Connecting to server");
@@ -112,21 +114,25 @@ fn main() -> nix::Result<()>
     println!("Lets go!!");
     for _ in 0..n_requests {
 
-        let tmp = data.choose(&mut rng);
+        let rand_i: usize = rng.gen_range(1..set_size);
+
+        let tmp = &data[rand_i];
+        let transpose = &transposes[rand_i];
 
         // println!("Sent:");
         // print!("{}", tmp.unwrap());
 
-        client.shared_buffer.send(tmp.unwrap());
+        client.shared_buffer.send(tmp);
+        
 
         client.shared_buffer.wait_response();
         let received = client.shared_buffer.receive();
 
-        let transpose = tmp.expect("Error").transpose();
+
 
         println!("Received!");
 
-        if received != transpose {
+        if received != *transpose {
             let difference = received.sub(&transpose);
 
             for i in 0..rows {
@@ -143,7 +149,7 @@ fn main() -> nix::Result<()>
             }
         }
 
-        debug_assert_eq!(received, transpose, "Received matrix is not the transpose");
+        debug_assert_eq!(received, *transpose, "Received matrix is not the transpose");
     }
 
     println!("Inform the server that I am leaving!!");

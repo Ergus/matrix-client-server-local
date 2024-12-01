@@ -240,6 +240,13 @@ where
 
     /// Parallel serialization function. Generally used to copy
     /// To shared memory.
+    ///
+    /// The function sets a minimum size to move in parallel because
+    /// the overhead of creating threads may cost more than
+    /// transferring small chunks.
+    ///
+    /// The limit at the moment is 8 blocks, but this parameter is
+    /// heuristic (almost arbitrary)
     fn to_buffer_parallel(&self, buffer: *mut c_void)
     {
         // This is number is from my heuristic and may be tuned

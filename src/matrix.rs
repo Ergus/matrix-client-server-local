@@ -1,11 +1,11 @@
 use std::{ptr,cmp,slice};
 use std::sync::{Arc, RwLock};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ffi::c_void;
 
 use rand::Rng;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
+use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 
 macro_rules! implement_numeric64 {
     ($($t:ty),*) => {
@@ -245,18 +245,50 @@ where
     /// To shared memory
     pub fn to_buffer(&self, buffer: *mut c_void)
     {
-        unsafe {
-            let rguard = self.data.read().unwrap();
+        let rguard = self.data.read().unwrap();
+        let base_ptr = rguard.as_ptr() as *const T;
 
+        let n_threads
+            = std::thread::available_parallelism().unwrap().get();
+
+        let n_total = self.rows * self.cols;
+        let n_per_thread = n_total / n_threads;
+        let rest = n_total - n_per_thread * n_threads;
+
+        let wptr = unsafe {
             *(buffer as *mut usize) = self.rows;
             *(buffer.add(size_of::<usize>()) as *mut usize) = self.cols;
+            buffer.add(2 * size_of::<usize>()) as *mut T
+        };
 
-            ptr::copy_nonoverlapping(
-                rguard.as_ptr(),
-                buffer.add(2 * size_of::<usize>()) as *mut T,
-                self.rows * self.cols
-            );
+        std::thread::scope(|s| {
+
+            for i in 0..n_threads {
+
+                let n_this_thread = n_per_thread + ((i < rest) as usize);
+
+                if n_this_thread == 0 {
+                    break;
+                }
+
+                let start_thread = i * n_per_thread + std::cmp::min(i, rest);
+
+                unsafe {
+                    let thread_rptr = AtomicPtr::new(base_ptr.add(start_thread) as *mut T);
+                    let thread_wptr = AtomicPtr::new(wptr.add(start_thread) as *mut T);
+
+                    let _ = s.spawn(move || {
+
+                        ptr::copy_nonoverlapping(
+                            thread_rptr.load(Ordering::Relaxed),
+                            thread_wptr.load(Ordering::Relaxed),
+                            n_this_thread
+                        );
+                    });
+                }
+            }
         }
+        )
     }
 
     /// Get Rows
@@ -449,8 +481,7 @@ where
         // at the time with similar chunk sizes implicitly introduces
         // load imbalance. But this is a 3 days job, no time for more
         // (maybe)
-        let n_threads
-            = std::thread::available_parallelism().unwrap().get();
+        let n_threads = std::thread::available_parallelism().unwrap().get();
 
         let transposed = Matrix::<T>::new(self.cols, self.rows);
 

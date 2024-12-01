@@ -40,7 +40,7 @@ fn parse_cl(args: &Vec<String>) -> (usize, usize, usize, usize)
 }
 
 /// Initialize the matrix vector in parallel.
-fn init_matrix_set(set_size: usize, rows: usize, cols: usize) -> Vec<Box<Matrix<f64>>>
+fn init_matrix_set<'a>(set_size: usize, rows: usize, cols: usize) -> Vec<Box<Matrix<'a, f64>>>
 {
     let num_threads: usize = std::thread::available_parallelism().unwrap().into();
 

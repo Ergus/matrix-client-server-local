@@ -1,4 +1,4 @@
-use std::{ptr,cmp};
+use std::{ptr,cmp,slice};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ffi::c_void;
@@ -45,8 +45,76 @@ impl Numeric64 for f64 {
     fn one() -> Self { 1.0 }
 }
 
+#[derive(Debug)]
+enum Storage<'a, T> {
+    VecData(Vec<T>),
+    SliceData(&'a [T]),
+}
+
+impl<'a, T> Storage<'a, T>
+{
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        match self {
+            Storage::VecData(vec) => vec.iter(),
+            Storage::SliceData(slice) => slice.iter(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Storage::VecData(vec) => vec.len(),
+            Storage::SliceData(slice) => slice.len(),
+        }
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        match self {
+            Storage::VecData(vec) => vec.as_ptr(),
+            Storage::SliceData(slice) => slice.as_ptr(),
+        }
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        match self {
+            Storage::VecData(vec) => vec.as_mut_ptr(),
+            Storage::SliceData(slice) => {
+                // Safety note: This is only safe if the slice is not
+                // empty and the caller ensures no mutation of the
+                // original slice
+                if slice.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    slice.as_ptr() as *mut T
+                }
+            }
+        }
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        match self {
+            Storage::VecData(vec) => vec.as_slice(),
+            Storage::SliceData(slice) => slice
+        }
+    }
+
+    // pub fn get(&self, idx: usize) -> T
+    // {
+    //     match self {
+    //         Storage::VecData(vec) => vec[idx],
+    //         Storage::SliceData(slice) => slice[idx]
+    //     }
+    // }
+}
+
+/// Operator ==
+impl<T: std::cmp::PartialEq> PartialEq<Storage<'_, T>> for Storage<'_, T> {
+    fn eq(&self, other: &Storage<T>) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct Matrix<T> {
+pub struct Matrix<'a, T> {
     /// Number of rows
     rows: usize,
 
@@ -54,7 +122,7 @@ pub struct Matrix<T> {
     cols: usize,
 
     /// The matrix data stored in an Arc
-    data: Arc<RwLock<Vec<T>>>,
+    data: Arc<RwLock<Storage<'a, T>>>,
 }
 
 
@@ -68,7 +136,7 @@ pub struct Matrix<T> {
 ///
 /// The main function to use in the final application may be the
 /// parallel version.
-impl<T> Matrix<T>
+impl<T> Matrix<'_, T>
 where
     T: Numeric64, Standard: Distribution<T>
 {
@@ -76,10 +144,15 @@ where
     const BLOCKDIM: usize = 64;  // This si a simple empiric value, we may tune it.
 
     /// Basic constructor to create an empty matrix
-    pub fn new(rows: usize, cols: usize) -> Self {
-        let data = Arc::new(RwLock::new(vec![T::default(); rows * cols]));
+    pub fn new(rows: usize, cols: usize) -> Self
+    {
+        let vec = vec![T::default(); rows * cols];
 
-        Self { rows, cols, data }
+        Self {
+            rows,
+            cols,
+            data: Arc::new(RwLock::new(Storage::VecData(vec))),
+        }
     }
 
     /// Constructor to generate the matrix based on an iteration function.
@@ -88,18 +161,19 @@ where
     where
         F: FnMut(usize, usize) -> T,
     {
-        let data = Arc::new(RwLock::new(Vec::with_capacity(rows * cols)));
+        let mut vec = Vec::with_capacity(rows * cols);
 
-        {
-            let mut wguard = data.write().unwrap();
-
-            for i in 0..rows {
-                for j in 0..cols {
-                    wguard.push(f(i, j));
-                }
+        for i in 0..rows {
+            for j in 0..cols {
+                vec.push(f(i, j));
             }
         }
-        Self { rows, cols, data }
+
+        Self {
+            rows,
+            cols,
+            data: Arc::new(RwLock::new(Storage::VecData(vec)))
+        }
     }
 
     /// Function to generate the random matrices.
@@ -108,32 +182,52 @@ where
     {
         let mut rng = rand::thread_rng();
 
-        let data = Arc::new(RwLock::new((0..rows * cols).map(|_| rng.gen()).collect()));
+        let vec = (0..rows * cols).map(|_| rng.gen()).collect();
 
-        Self { rows, cols, data}
+        Self {
+            rows,
+            cols,
+            data: Arc::new(RwLock::new(Storage::VecData(vec)))
+        }
     }
 
     /// Copy the matrix from a memory buffer. Generally used to copy
     /// from shared memory
-    pub fn from_buffer(buffer: *const c_void) -> Self
+    pub fn from_buffer(buffer: *mut c_void) -> Self
     {
         let rows: usize = unsafe { *(buffer as *const usize) };
         let cols: usize = unsafe { *(buffer.add(8) as *const usize) };
 
-        let data = Arc::new(RwLock::new(vec![T::default(); rows * cols]));
+        let slice: &[T] = unsafe {
+            slice::from_raw_parts_mut(buffer.add(16) as *mut T, rows * cols)
+        };
 
-        unsafe {
-            let mut wguard = data.write().unwrap();
-
-            ptr::copy_nonoverlapping(
-                buffer.add(16) as *const T,
-                wguard.as_mut_ptr(),
-                rows * cols
-            );
-
+        Self {
+            rows,
+            cols,
+            data: Arc::new(RwLock::new(Storage::SliceData(slice)))
         }
-        Self {rows, cols,  data}
     }
+
+    // pub fn from_buffer(buffer: *const c_void) -> Self
+    // {
+    //     let rows: usize = unsafe { *(buffer as *const usize) };
+    //     let cols: usize = unsafe { *(buffer.add(8) as *const usize) };
+
+    //     let data = Arc::new(RwLock::new(vec![T::default(); rows * cols]));
+
+    //     unsafe {
+    //         let mut wguard = data.write().unwrap();
+
+    //         ptr::copy_nonoverlapping(
+    //             buffer.add(16) as *const T,
+    //             wguard.as_mut_ptr(),
+    //             rows * cols
+    //         );
+
+    //     }
+    //     Self {rows, cols,  data}
+    // }
 
 
     pub fn validate(&self) -> bool
@@ -281,12 +375,16 @@ where
 
         let mut wguard = self.data.write().unwrap();
 
-        for row in 0..self.rows {
-            for col in 0..row {
+        unsafe {
+            let slice = slice::from_raw_parts_mut(wguard.as_mut_ptr(), wguard.len());
 
-                let tmp: T = wguard[col * self.rows + row].clone();
-                wguard[col * self.rows + row] = wguard[row * self.cols + col].clone();
-                wguard[row * self.cols + col] = tmp;
+            for row in 0..self.rows {
+                for col in 0..row {
+
+                    let tmp: T = slice[col * self.rows + row].clone();
+                    slice[col * self.rows + row] = slice[row * self.cols + col].clone();
+                    slice[row * self.cols + col] = tmp;
+                }
             }
         }
     }
@@ -299,13 +397,16 @@ where
 
         let transpose = Matrix::<T>::new(self.cols, self.rows);
 
-        {
+        unsafe {
             let rguard = self.data.read().unwrap();
             let mut twguard = transpose.data.write().unwrap();
 
+            let rslice = slice::from_raw_parts(rguard.as_ptr(), rguard.len());
+            let wslice = slice::from_raw_parts_mut(twguard.as_mut_ptr(), rguard.len());
+
             for row in 0..self.rows {
                 for col in 0..self.cols {
-                    twguard[col * self.rows + row] = rguard[row * self.cols + col].clone();
+                    wslice[col * self.rows + row] = rslice[row * self.cols + col].clone();
                 }
             }
         }
@@ -475,8 +576,7 @@ where
     /// Get a matrix value using copy.
     pub fn get(&self, row: usize, col: usize) -> T
     {
-        let rguard = self.data.read().unwrap();
-        rguard[row * self.cols + col]
+        self.data.read().unwrap().as_slice()[row * self.cols + col]
     }
 
     /// Substract two matrices and obtain another matrix.
@@ -495,16 +595,19 @@ where
         let rguard1 = self.data.read().unwrap();
         let rguard2 = other.data.read().unwrap();
 
+        let slice1 = rguard1.as_slice();
+        let slice2 = rguard2.as_slice();
+
         Matrix::<T>::from_fn(
             self.rows,
             self.cols,
-            |i, j| rguard1[i * self.cols + j] - rguard2[i * self.cols + j]
+            |i, j| slice1[i * self.cols + j] - slice2[i * self.cols + j]
         )
     }
 }
 
 /// Operator ==
-impl<T: std::cmp::PartialEq> PartialEq<Matrix<T>> for Matrix<T> {
+impl<T: std::cmp::PartialEq> PartialEq<Matrix<'_, T>> for Matrix<'_, T> {
 
     fn eq(&self, other: &Matrix<T>) -> bool {
         let rguard1 = self.data.read().unwrap();
@@ -518,14 +621,15 @@ impl<T: std::cmp::PartialEq> PartialEq<Matrix<T>> for Matrix<T> {
 
 
 /// Helper for print
-impl<T: std::fmt::Debug> std::fmt::Display for Matrix<T> {
+impl<T: std::fmt::Debug> std::fmt::Display for Matrix<'_, T> {
 
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 
         let rguard = self.data.read().unwrap();
+        let gslice = rguard.as_slice();
 
         for i in 0..self.rows {
-            let slice = &rguard[i * self.cols.. (i + 1) * self.cols];
+            let slice = &gslice[i * self.cols.. (i + 1) * self.cols];
 
             write!(f, "{:?}\n", slice)?;  // Format each row and move to the next line
         }

@@ -209,27 +209,6 @@ where
         }
     }
 
-    // pub fn from_buffer(buffer: *const c_void) -> Self
-    // {
-    //     let rows: usize = unsafe { *(buffer as *const usize) };
-    //     let cols: usize = unsafe { *(buffer.add(8) as *const usize) };
-
-    //     let data = Arc::new(RwLock::new(vec![T::default(); rows * cols]));
-
-    //     unsafe {
-    //         let mut wguard = data.write().unwrap();
-
-    //         ptr::copy_nonoverlapping(
-    //             buffer.add(16) as *const T,
-    //             wguard.as_mut_ptr(),
-    //             rows * cols
-    //         );
-
-    //     }
-    //     Self {rows, cols,  data}
-    // }
-
-
     pub fn validate(&self) -> bool
     {
         {
@@ -243,18 +222,45 @@ where
 
     /// Very primitive serialization function. Generally used to copy
     /// To shared memory
-    pub fn to_buffer(&self, buffer: *mut c_void)
+    fn to_buffer_seq(&self, buffer: *mut c_void)
     {
+        unsafe {
+            let rguard = self.data.read().unwrap();
+
+            *(buffer as *mut usize) = self.rows;
+            *(buffer.add(size_of::<usize>()) as *mut usize) = self.cols;
+
+            ptr::copy_nonoverlapping(
+                rguard.as_ptr(),
+                buffer.add(2 * size_of::<usize>()) as *mut T,
+                self.rows * self.cols
+            );
+        }
+    }
+
+    /// Parallel serialization function. Generally used to copy
+    /// To shared memory.
+    fn to_buffer_parallel(&self, buffer: *mut c_void)
+    {
+        // This is number is from my heuristic and may be tuned
+        let minimum_size: usize = 8 * Self::BLOCKDIM * Self::BLOCKDIM;
+
+        // We don't want to use all the threads here because this is an IO operation
+        // over shared memory. * is a conservative number, so it can be improved.
+        // I don't recommend to use dynamic balance here.
+        let n_threads = std::cmp::min(
+            8,                            // In my tests more threads don't improve io.
+            self.datalen() / minimum_size // We know it is 2^n, so no need to handle remainder
+        );
+
         let rguard = self.data.read().unwrap();
         let base_ptr = rguard.as_ptr() as *const T;
 
-        let n_threads
-            = std::thread::available_parallelism().unwrap().get();
+        // Again, we don't need to handle remainder due to 2^m
+        let n_per_thread = self.datalen() / n_threads;
+        debug_assert_eq!(n_per_thread % n_threads, 0, "Dimension error in parallel out");
 
-        let n_total = self.rows * self.cols;
-        let n_per_thread = n_total / n_threads;
-        let rest = n_total - n_per_thread * n_threads;
-
+        // Update header and get payload start
         let wptr = unsafe {
             *(buffer as *mut usize) = self.rows;
             *(buffer.add(size_of::<usize>()) as *mut usize) = self.cols;
@@ -265,15 +271,8 @@ where
 
             for i in 0..n_threads {
 
-                let n_this_thread = n_per_thread + ((i < rest) as usize);
-
-                if n_this_thread == 0 {
-                    break;
-                }
-
-                let start_thread = i * n_per_thread + std::cmp::min(i, rest);
-
                 unsafe {
+                    let start_thread = i * n_per_thread;
                     let thread_rptr = AtomicPtr::new(base_ptr.add(start_thread) as *mut T);
                     let thread_wptr = AtomicPtr::new(wptr.add(start_thread) as *mut T);
 
@@ -282,13 +281,31 @@ where
                         ptr::copy_nonoverlapping(
                             thread_rptr.load(Ordering::Relaxed),
                             thread_wptr.load(Ordering::Relaxed),
-                            n_this_thread
+                            n_per_thread
                         );
                     });
                 }
             }
+        })
+    }
+
+    /// Serialization function choosed to imprve IO
+    ///
+    /// This function establishes a minimum size of 8 blocks to execute
+    /// in parallel.
+    /// As we know that the matrices come as powers of 2 => 2^(m+n)
+    /// Then any number above will be also a factor of the previous,
+    /// meaning that the threads will execute balanced.
+    pub fn to_buffer(&self, buffer: *mut c_void)
+    {
+        // I choose heuristically 8 blockdims
+        let minimum_size: usize = 8 * Self::BLOCKDIM * Self::BLOCKDIM;
+
+        if self.datalen() < minimum_size {
+            self.to_buffer_seq(buffer)
+        } else {
+            self.to_buffer_parallel(buffer)
         }
-        )
     }
 
     /// Get Rows

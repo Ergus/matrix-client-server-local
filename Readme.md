@@ -204,3 +204,24 @@ I spend about 2.5 days.
 1 Thursday: made the parts until work,
 1/2 Friday: Optimization and parallelization,
 1 Saturday: Readme, testing and optimize details, improve the statistics and outputs
+
+
+
+Old Code:
+
+Printing Stats collected.
+Matrix Dim: 16384x16384
+CopyIn                           count: 10       avg: 331043.9   min: 321682     max: 367517
+Transpose                        count: 10       avg: 222046.8   min: 220931     max: 223968
+CopyOut                          count: 10       avg: 114759.3   min: 103039     max: 214955
+Total                            count: 10       avg: 675408.5   min: 653513     max: 811480
+Throughput (MFLOPS): net:1208.91 gross:797.00 full:397.44
+
+New Code:
+
+CopyIn                           count: 10       avg: 0.0        min: 0          max: 0
+Transpose                        count: 10       avg: 232133.8   min: 222747     max: 308260
+CopyOut                          count: 10       avg: 75624.3    min: 74324      max: 80138
+Total                            count: 10       avg: 331846.2   min: 320220     max: 410978
+Throughput (MFLOPS): net:1156.38 gross:872.23 full:808.92
+

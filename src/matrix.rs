@@ -604,6 +604,92 @@ where
         transposed
     }
 
+
+    /// Full transpose for big matrices with blocks and threads.
+    /// This version uses dynamic dispatch to solve potential imbalances
+    /// when the host cores have different speed
+    pub fn transpose_parallel_square_inplace(&mut self, blocksize: usize)
+    {
+        assert_eq!(self.cols, self.rows, "Inplace transpose is only for squared matrices.");
+
+        let n_threads
+            = std::thread::available_parallelism().unwrap().get();
+
+        let blocks_cols = self.cols / blocksize;
+
+        let total_blocks = blocks_cols * (blocks_cols + 1) / 2;
+
+        let counter = AtomicUsize::new(0);
+
+        let getidx = || -> Option<(usize, usize)>{
+            let k = counter.fetch_add(1, Ordering::SeqCst);
+            if k < total_blocks {
+                let x = ((((8 * k + 7) as f64).sqrt() - 1.0) / 2.0).ceil() as usize - 1;
+                let y = k - (x)*(x + 1)/2;
+
+                return Some((x, y));
+            }
+            None
+        };
+
+
+        std::thread::scope(|s| {
+
+            for i in 0..n_threads {
+
+                // This is for the case when there are less blocks than available cores
+                if i >= total_blocks {
+                    break;
+                }
+
+                let mut cself = self.clone();
+
+                let _ = s.spawn(move || {
+
+                    let mut block1 = Matrix::<T>::new(blocksize, blocksize);
+                    let mut block2 = Matrix::<T>::new(blocksize, blocksize);
+
+                    loop {
+                        match getidx() {
+                            Some((row, col)) => {
+                                let first_row = row * blocksize;
+                                let first_col = col * blocksize;
+
+                                cself.copy_to_block(&mut block1, first_row, first_col);
+                                block1.transpose_small_square_inplace();
+
+                                if row != col {
+                                    cself.copy_to_block(&mut block2, first_col, first_row);
+                                    block2.transpose_small_square_inplace();
+                                }
+
+                                cself.copy_from_block(&block1, first_col, first_row);
+
+                                if row != col {
+                                    cself.copy_from_block(&block2, first_row, first_col);
+                                }
+                            },
+                            None => break
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+
+    pub fn transpose(&self) -> Matrix<T>
+    {
+        if self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM {
+            return self.transpose_small_rectangle();
+        }
+
+        let blockdim = *[self.cols, self.rows, Self::BLOCKDIM].iter().min().unwrap();
+        self.transpose_parallel_dynamic(blockdim)
+    }
+
+
+
     /// This is intended to become the main function to use in the
     /// server code.
     ///
@@ -617,14 +703,23 @@ where
     ///
     /// Otherwise we use BLOCKDIM x BLOCKDIM
     /// BLOCKDIM = 64 by default (hardcoded)
-    pub fn transpose(&self) -> Matrix<T>
+    pub fn transpose_inplace(&mut self)
     {
         if self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM {
-            return self.transpose_small_rectangle();
+            let transposed = self.transpose_small_rectangle();
+            transposed.to_buffer(self.data.write().unwrap().as_mut_ptr() as *mut c_void);
         }
 
         let blockdim = *[self.cols, self.rows, Self::BLOCKDIM].iter().min().unwrap();
-        self.transpose_big(blockdim)
+
+        if self.rows == self.cols {
+            return self.transpose_parallel_square_inplace(blockdim);
+        }
+
+        let transposed = self.transpose_parallel_dynamic(blockdim);
+
+        transposed.to_buffer(self.data.write().unwrap().as_mut_ptr() as *mut c_void);
+
     }
 
     /// Get a matrix value using copy.
@@ -963,6 +1058,24 @@ mod tests {
             128, 512
         );
     }
+
+    #[test]
+    fn test_matrix_transpose_big_square_inplace()
+    {
+        let mut matrix = Matrix::from_fn(512, 512, |i, j| i * 512 + j);
+        assert!(matrix.validate());
+
+        matrix.transpose_parallel_square_inplace(64);
+        assert!(matrix.validate());
+
+        // Verify all elements
+        for i in 0..512 {
+            for j in 0..512 {
+                assert_eq!(matrix.get(i, j), j * 512 + i);
+            }
+        }
+    }
+
 
     #[test]
     fn test_matrix_transpose_big_parallel_static_high()

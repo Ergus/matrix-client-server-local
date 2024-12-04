@@ -165,12 +165,12 @@ impl Summary {
         // gross: to the transpose + send back
         // full: Refers to all Copy_in + transpose + Copy_out
         // 1.0E6 because time is in micro seconds -> Mega
-        let net = self.stats_map.get("Transpose").unwrap().avg;
-        let gross = net + self.stats_map.get("CopyOut").unwrap().avg;
+        let gross = self.stats_map.get("Transpose").unwrap().avg;
+        //let gross = net + self.stats_map.get("CopyOut").unwrap().avg;
         let full = self.stats_map.get("Total").unwrap().avg;
 
-        println!("Throughput (MFLOPS): net:{:.2} gross:{:.2} full:{:.2}\n",
-            ops / net, ops / gross, ops / full);
+        println!("Throughput (MFLOPS): gross:{:.2} full:{:.2}\n",
+            ops / gross, ops / full);
     }
 
 }

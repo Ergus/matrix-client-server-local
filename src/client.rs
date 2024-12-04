@@ -123,12 +123,9 @@ fn main() -> nix::Result<()>
         // print!("{}", tmp.unwrap());
 
         client.shared_buffer.send(tmp);
-        
 
         client.shared_buffer.wait_response();
         let received = client.shared_buffer.receive();
-
-
 
         println!("Received!");
 

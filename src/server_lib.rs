@@ -62,11 +62,11 @@ impl Server {
             // Poll the ready flag
             shared_buffer.wait_response();
             println!("Received matrix: {} from client: {}", counter, shared_buffer.id());
-            counter = counter + 1;
+            counter += 1;
 
             let mut __guard_total = stats::TimeGuard::new("Total");
 
-            let matrix = { // Read Matrix from shared memory
+            let mut matrix = { // Read Matrix from shared memory
                 let mut __guard = stats::TimeGuard::new("CopyIn");
                 let matrix = Matrix::<f64>::from_buffer(shared_buffer.payload);
 
@@ -81,26 +81,14 @@ impl Server {
             };
 
 
-            let transpose: Matrix::<f64> = {
-                let __guard = stats::TimeGuard::new(
-                    format!("Transpose_{}X{}", matrix.rows(), matrix.cols()).as_str()
-                );
-                matrix.transpose()
-            };
 
-            let _ctranspose = unsafe {
-                let cmatrix = bridge::from_buffer(shared_buffer.payload as *mut u8);
+            let __guard = stats::TimeGuard::new(
+                format!("Transpose_{}X{}", matrix.rows(), matrix.cols()).as_str()
+            );
+            matrix.transpose_inplace();
 
-                let __guard = stats::TimeGuard::new("CTranspose");
-                cmatrix.transpose()
-            };
+            shared_buffer.notify();
 
-
-            { // Write the result back into shared memory
-                let __guard = stats::TimeGuard::new("CopyOut");
-                transpose.to_buffer(shared_buffer.payload);
-                shared_buffer.notify();
-            }
         }
 
         Ok(())

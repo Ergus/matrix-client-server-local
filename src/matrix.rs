@@ -395,7 +395,6 @@ where
 
         for row_block in (0..self.rows).step_by(blocksize) {
             for col_block in (0..self.cols).step_by(blocksize) {
-
                 self.copy_to_block(&mut block, row_block, col_block);
                 block.transpose_small_square_inplace();
                 transposed.copy_from_block(&block, col_block, row_block);

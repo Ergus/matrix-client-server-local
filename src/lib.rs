@@ -9,3 +9,5 @@ mod shared_buffer;
 pub use shared_buffer::SharedBuffer;
 
 mod stats;
+mod bridge;
+

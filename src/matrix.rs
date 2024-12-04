@@ -799,7 +799,7 @@ mod tests {
 
     fn test_matrix_transpose<F>(test_fun: F, rows: usize, cols: usize)
     where
-       F: Fn(&Matrix<usize>, usize) -> Matrix<usize>
+       F: for<'a> Fn(&'a Matrix<'a, usize>, usize) -> Matrix<'a, usize>
     {
         let matrix = Matrix::from_fn(rows, cols, |i, j| i * cols + j);
         assert!(matrix.validate());
@@ -819,26 +819,35 @@ mod tests {
     #[test]
     fn test_matrix_transpose_big_squared()
     {
-        test_matrix_transpose(Matrix::<usize>::transpose_big, 512, 512);
+        test_matrix_transpose(
+            |mat: &Matrix<usize>, bsize: usize| mat.transpose_big(bsize),
+            512, 512
+        );
     }
 
     #[test]
     fn test_matrix_transpose_big_heigh()
     {
-        test_matrix_transpose(Matrix::<usize>::transpose_big, 512, 128);
+        test_matrix_transpose(
+            |mat: &Matrix<usize>, bsize: usize| mat.transpose_big(bsize),
+            512, 128
+        );
     }
 
     #[test]
     fn test_matrix_transpose_big_width()
     {
-        test_matrix_transpose(Matrix::<usize>::transpose_big, 512, 128);
+        test_matrix_transpose(
+            |mat: &Matrix<usize>, bsize: usize| mat.transpose_big(bsize),
+            128, 512
+        );
     }
 
     #[test]
     fn test_matrix_transpose_big_parallel_static_high()
     {
         test_matrix_transpose(
-            Matrix::<usize>::transpose_parallel_static,
+            |mat: &Matrix<usize>, bsize: usize|  mat.transpose_parallel_static(bsize),
             512, 256
         );
     }
@@ -847,7 +856,7 @@ mod tests {
     fn test_matrix_transpose_big_parallel_static_width()
     {
         test_matrix_transpose(
-            Matrix::<usize>::transpose_parallel_static,
+            |mat: &Matrix<usize>, bsize: usize|  mat.transpose_parallel_static(bsize),
             256, 512
         );
     }
@@ -856,7 +865,7 @@ mod tests {
     fn test_matrix_transpose_big_parallel_dynamic_high()
     {
         test_matrix_transpose(
-            Matrix::<usize>::transpose_parallel_dynamic,
+            |mat: &Matrix<usize>, bsize: usize|  mat.transpose_parallel_dynamic(bsize),
             512, 256
         );
     }
@@ -865,7 +874,7 @@ mod tests {
     fn test_matrix_transpose_big_parallel_dynamic_width()
     {
         test_matrix_transpose(
-            Matrix::<usize>::transpose_parallel_static,
+            |mat: &Matrix<usize>, bsize: usize|  mat.transpose_parallel_dynamic(bsize),
             256, 512
         );
     }

@@ -18,7 +18,8 @@ impl Drop for ThreadInfo {
         let summary = Summary::new(&self.times_map);
 
         // This is hacky, but good enough for an assignment (it works)
-        summary.print(&["CopyIn", "Transpose", "CopyOut", "Total"].to_vec());
+        summary.print();
+        //summary.print(&["CopyIn", "Transpose", "CTranspose", "CopyOut", "Total"].to_vec());
 
     }
 }
@@ -73,6 +74,7 @@ struct StatsEntry {
     avg: f64,
     min: u128,
     max: u128,
+    sum: u128,
 }
 
 impl StatsEntry {
@@ -86,7 +88,7 @@ impl StatsEntry {
         let max = *timesvec.iter().max().expect("Vector is empty"); // Find the max element
         let min = *timesvec.iter().min().expect("Vector is empty"); // Find the min element
 
-        Self {count, avg, min, max}
+        Self {count, avg, min, max, sum}
 
     }
 }
@@ -96,8 +98,8 @@ impl std::fmt::Display for StatsEntry {
 
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result
     {
-        write!(f, "count: {:<8} avg: {:<10.1} min: {:<10} max: {:<10}",
-            self.count, self.avg, self.min, self.max)?;
+        write!(f, "count: {:<8} avg: {:<10.1} min: {:<10} max: {:<10} sum: {:<10}",
+            self.count, self.avg, self.min, self.max, self.sum)?;
         Ok(())
     }
 }
@@ -143,13 +145,17 @@ impl Summary {
         Self{ rows, cols, stats_map }
     }
 
-    pub fn print(&self, keys: &Vec<&str>)
+    pub fn print(&self)
     {
         println!("Printing Stats collected.  \nMatrix Dim: {}x{}", self.rows, self.cols);
 
-        for key in keys.iter() {
-            println!("{:24}\t {}", key, self.stats_map[&key.to_string()]);
+        for (key, statistic) in self.stats_map.iter() {
+            println!("{:24}\t {}", key, statistic);
         }
+
+        // for key in keys.iter() {
+        //     println!("{:24}\t {}", key, self.stats_map[&key.to_string()]);
+        // }
 
         let ops = (self.rows * self.cols) as f64;
 

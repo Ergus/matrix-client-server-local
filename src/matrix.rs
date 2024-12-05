@@ -74,6 +74,13 @@ impl<'a, T> Storage<'a, T>
         }
     }
 
+    pub fn is_owner(&self) -> bool {
+        match self {
+            Storage::VecData(_) => true,
+            Storage::SliceData(_) => false,
+        }
+    }
+
     pub fn as_mut_ptr(&mut self) -> *mut T {
         match self {
             Storage::VecData(vec) => vec.as_mut_ptr(),
@@ -708,17 +715,41 @@ where
         if self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM {
             let transposed = self.transpose_small_rectangle();
             transposed.to_buffer(self.data.write().unwrap().as_mut_ptr() as *mut c_void);
+            return;
         }
 
         let blockdim = *[self.cols, self.rows, Self::BLOCKDIM].iter().min().unwrap();
 
+        // Squared matrices can be transposed in place because they
+        // are not reshaped.  so no block reshape takes place and we
+        // can access two blocks per thread on every call and
+        // transpose them in-place "simultaneously".
+        // Doing this avoids creating a temporal transposed matrix which
+        // avoids extra memory and al the io are more local, almost
+        // duplicating the throughput 
         if self.rows == self.cols {
             return self.transpose_parallel_square_inplace(blockdim);
         }
 
+        // Sadly, when the matrix is rectangular we cannot use the
+        // same optimization than above. So we create a temporal
+        // transpose on memory and copy back to the original buffer.
         let transposed = self.transpose_parallel_dynamic(blockdim);
 
-        transposed.to_buffer(self.data.write().unwrap().as_mut_ptr() as *mut c_void);
+        if self.data.read().unwrap().is_owner() {
+            unsafe {
+                let mut wlk = self.data.write().unwrap();
+                // We need to pad back 128 bits to set rows and cols,
+                // because the data (when shared) stored only the
+                // vector as a slice.
+                let ptr = wlk.as_mut_ptr().sub(2) as *mut c_void;
+                transposed.to_buffer(ptr);
+            }
+        } else {
+            self.rows = transposed.rows;
+            self.cols = transposed.cols;
+            self.data = transposed.data;
+        }
 
     }
 

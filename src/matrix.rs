@@ -489,7 +489,6 @@ where
             }
         });
 
-
         transposed
     }
 
@@ -637,6 +636,21 @@ where
             _phantom: std::marker::PhantomData,
         }
     }
+
+
+    pub fn update_from_matrix<O: SliceOrVec<T>>(&mut self, other: MatrixTemp<T, O>, par: bool)
+    {
+        self.rows = other.rows;
+        self.cols = other.cols;
+        let wguard = self.data.write().unwrap();
+        unsafe {
+            if par {
+                other.to_buffer_parallel(wguard.as_ptr().byte_sub(16) as *mut c_void);
+            } else {
+                other.to_buffer_seq(wguard.as_ptr().byte_sub(16) as *mut c_void);
+            }
+        }
+    }
 }
 
 /// Operator ==
@@ -757,6 +771,78 @@ mod tests {
         }
     }
 
+    fn matrix_borrow_update(parallel: bool)
+    {
+        let rows = 512;
+        let cols = 1024;
+
+        let nelems = rows * cols;
+
+        // Calculate the total size: 2 u64s for rows and cols, then the f64 data
+        let data_layout = Layout::array::<f64>(2 + nelems).expect("Layout creation failed");
+
+        unsafe {
+            let ptr = alloc(data_layout) as *mut c_void;
+
+            if ptr.is_null() {
+                panic!("Memory allocation failed!");
+            }
+
+
+            let hdr_ptr = ptr as *mut u64;
+            std::ptr::write(hdr_ptr, rows as u64);
+            std::ptr::write(hdr_ptr.add(1), cols as u64);
+
+            let data = std::slice::from_raw_parts_mut(hdr_ptr.add(2) as *mut f64, nelems);
+
+            for i in 0..nelems {
+                data[i] = i as f64;
+            }
+
+            let mut matrix = MatrixBorrow::<f64>::from_buffer(ptr);
+
+            assert_eq!(matrix.rows(), rows);
+            assert_eq!(matrix.cols(), cols);
+            assert_eq!(matrix.datalen(), nelems);
+
+            for i in 0..rows {
+                for j in 0..cols {
+                    assert_eq!(matrix.get(i, j), (i * cols + j) as f64);
+                }
+            }
+
+            // Transpose to have something to check
+            let transposed = matrix.transpose_big(64);
+            matrix.update_from_matrix(transposed, parallel);
+
+            // Check matrix indices
+            for i in 0..cols {
+                for j in 0..rows {
+                    assert_eq!(matrix.get(i, j), (j * cols + i) as f64);
+                }
+            }
+
+            // Check the underlying vector
+            for i in 0..nelems {
+                assert_eq!(data[i], ((i / rows) + (i % rows) * cols) as f64);
+            }
+
+            dealloc(ptr as *mut u8, data_layout);
+
+        }
+    }
+
+    #[test]
+    fn matrix_borrow_update_seq()
+    {
+        matrix_borrow_update(false);
+    }
+
+    #[test]
+    fn matrix_borrow_update_par()
+    {
+        matrix_borrow_update(true);
+    }
 
     #[test]
     fn test_matrix_to_buffer_seq()
@@ -828,6 +914,7 @@ mod tests {
             dealloc(ptr as *mut u8, data_layout);
         }
     }
+
 
 
     #[test]

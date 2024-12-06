@@ -95,7 +95,7 @@ fn main() -> nix::Result<()>
     println!("Initializing matrices");
     let data = init_matrix_set(set_size, rows, cols);
 
-    let transposes = data.iter().map(|box_ref| box_ref.transpose()).collect::<Vec<_>>();
+    let transposes = data.iter().map(|box_ref| box_ref.transpose_parallel_static(64)).collect::<Vec<_>>();
 
     let payload_size: u64 = data.first().expect("The data array is empty?").payload_size() as u64;
 
@@ -123,12 +123,9 @@ fn main() -> nix::Result<()>
         // print!("{}", tmp.unwrap());
 
         client.shared_buffer.send(tmp);
-        
 
         client.shared_buffer.wait_response();
         let received = client.shared_buffer.receive();
-
-
 
         println!("Received!");
 

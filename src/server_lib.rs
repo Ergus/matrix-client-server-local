@@ -66,7 +66,7 @@ impl Server {
 
             let mut __guard_total = stats::TimeGuard::new("Total");
 
-            let matrix = { // Read Matrix from shared memory
+            let mut matrix = { // Read Matrix from shared memory
                 let mut __guard = stats::TimeGuard::new("CopyIn");
                 let matrix = MatrixBorrow::<f64>::from_buffer(shared_buffer.payload);
 
@@ -81,7 +81,7 @@ impl Server {
             };
 
 
-            let transpose: Matrix::<f64> = {
+            let transpose: Option<Matrix::<f64>> = {
                 let __guard = stats::TimeGuard::new(
                     format!("Transpose_{}X{}", matrix.rows(), matrix.cols()).as_str()
                 );
@@ -90,7 +90,11 @@ impl Server {
 
             { // Write the result back into shared memory
                 let __guard = stats::TimeGuard::new("CopyOut");
-                transpose.to_buffer(shared_buffer.payload);
+                match transpose {
+                    Some(mtranspose) => matrix.update_from_matrix(&mtranspose, true),
+                    None => {}
+                }
+
                 shared_buffer.notify();
             }
         }

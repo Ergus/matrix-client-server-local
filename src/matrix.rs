@@ -48,14 +48,14 @@ impl Numeric64 for f64 {
 /// Trait to limit to slice or vector only
 pub trait SliceOrVec<T: Numeric64>:
     std::ops::Deref<Target = [T]> +
-    std::ops::DerefMut<Target = [T]> +
     Sync +
     Send +
+    Clone +
     std::cmp::PartialEq
 {}
 
 impl<T: Numeric64> SliceOrVec<T> for Vec<T> {}
-impl<T: Numeric64> SliceOrVec<T> for &mut [T] {}
+impl<T: Numeric64> SliceOrVec<T> for &[T] {}
 
 
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ where T: Numeric64,
 }
 
 pub type Matrix<T> = MatrixTemp<T, Vec<T>>;
-pub type MatrixBorrow<'a, T> = MatrixTemp<T, &'a mut [T]>;
+pub type MatrixBorrow<'a, T> = MatrixTemp<T, &'a [T]>;
 
 
 /// A matrix class of 64 bits numbers.
@@ -291,7 +291,7 @@ where
 
         let copysize: usize = col_end - col_block;
 
-        let src: *mut T = self.data.write().unwrap().as_mut_ptr();
+        let src: *mut T = self.data.write().unwrap().as_ptr() as *mut T;
         let dst: *const T = block.data.read().unwrap().as_ptr();
 
         let mut startdst: usize = 0;
@@ -319,10 +319,10 @@ where
     {
         assert_eq!(self.rows, self.cols, "Small transpose must be squared");
 
-        let mut wguard = self.data.write().unwrap();
+        let wguard = self.data.write().unwrap();
 
         unsafe {
-            let slice = slice::from_raw_parts_mut(wguard.as_mut_ptr(), wguard.len());
+            let slice = slice::from_raw_parts_mut(wguard.as_ptr() as *mut T, wguard.len());
 
             for row in 0..self.rows {
                 for col in 0..row {
@@ -492,6 +492,79 @@ where
         transposed
     }
 
+    /// Full transpose for big matrices with blocks and threads.
+    /// This version uses dynamic dispatch to solve potential imbalances
+    /// when the host cores have different speed
+    pub fn transpose_parallel_square_inplace(&mut self, blocksize: usize)
+    {
+        assert_eq!(self.cols, self.rows, "Inplace transpose is only for squared matrices.");
+
+        let n_threads
+            = std::thread::available_parallelism().unwrap().get();
+
+        let blocks_cols = self.cols / blocksize;
+
+        let total_blocks = blocks_cols * (blocks_cols + 1) / 2;
+
+        let counter = AtomicUsize::new(0);
+
+        let getidx = || -> Option<(usize, usize)>{
+            let k = counter.fetch_add(1, Ordering::SeqCst);
+            if k < total_blocks {
+                let x = ((((8 * k + 7) as f64).sqrt() - 1.0) / 2.0).ceil() as usize - 1;
+                let y = k - (x)*(x + 1)/2;
+
+                return Some((x, y));
+            }
+            None
+        };
+
+
+        std::thread::scope(|s| {
+
+            for i in 0..n_threads {
+
+                // This is for the case when there are less blocks than available cores
+                if i >= total_blocks {
+                    break;
+                }
+
+                let mut cself = self.clone();
+
+                let _ = s.spawn(move || {
+
+                    let mut block1 = Matrix::<T>::new(blocksize, blocksize);
+                    let mut block2 = Matrix::<T>::new(blocksize, blocksize);
+
+                    loop {
+                        match getidx() {
+                            Some((row, col)) => {
+                                let first_row = row * blocksize;
+                                let first_col = col * blocksize;
+
+                                cself.copy_to_block(&mut block1, first_row, first_col);
+                                block1.transpose_small_square_inplace();
+
+                                if row != col {
+                                    cself.copy_to_block(&mut block2, first_col, first_row);
+                                    block2.transpose_small_square_inplace();
+                                }
+
+                                cself.copy_from_block(&block1, first_col, first_row);
+
+                                if row != col {
+                                    cself.copy_from_block(&block2, first_row, first_col);
+                                }
+                            },
+                            None => break
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+
     /// This is intended to become the main function to use in the
     /// server code.
     ///
@@ -505,28 +578,26 @@ where
     ///
     /// Otherwise we use BLOCKDIM x BLOCKDIM
     /// BLOCKDIM = 64 by default (hardcoded)
-    pub fn transpose(&self) -> Matrix<T>
+    pub fn transpose(&mut self) -> Option<Matrix<T>>
     {
         if self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM {
-            return self.transpose_small_rectangle();
+            return Some(self.transpose_small_rectangle());
         }
 
         let blockdim = *[self.cols, self.rows, Self::BLOCKDIM].iter().min().unwrap();
-        self.transpose_parallel_dynamic(blockdim)
+
+        if self.cols == self.rows {
+            self.transpose_parallel_square_inplace(blockdim);
+            return None;
+        }
+
+        Some(self.transpose_parallel_dynamic(blockdim))
     }
 
     /// Get a matrix value using copy.
     pub fn get(&self, row: usize, col: usize) -> T
     {
         self.data.read().unwrap()[row * self.cols + col]
-    }
-
-    /// Get a matrix value using copy.
-    pub fn set(&self, row: usize, col: usize, value: &T)
-    {
-        let mut wguard = self.data.write().unwrap();
-
-        wguard[row * self.cols + col] = *value;
     }
 
     /// Substract two matrices and obtain another matrix.
@@ -558,7 +629,6 @@ impl<T> Matrix<T>
 where
     T: Numeric64,
     Standard: Distribution<T>,
-
 {
     /// Basic constructor to create an empty matrix
     pub fn new(rows: usize, cols: usize) -> Self

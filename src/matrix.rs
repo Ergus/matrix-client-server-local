@@ -94,7 +94,6 @@ where
     T: Numeric64,
     S: SliceOrVec<T>,
     Standard: Distribution<T>,
-
 {
     /// Default block dimension to use for temporal buffers.
     const BLOCKDIM: usize = 64;  // This si a simple empiric value, we may tune it.
@@ -523,6 +522,14 @@ where
         self.data.read().unwrap()[row * self.cols + col]
     }
 
+    /// Get a matrix value using copy.
+    pub fn set(&self, row: usize, col: usize, value: &T)
+    {
+        let mut wguard = self.data.write().unwrap();
+
+        wguard[row * self.cols + col] = *value;
+    }
+
     /// Substract two matrices and obtain another matrix.
     ///
     /// We didn't implement the trait sub because the prototype is not
@@ -531,7 +538,7 @@ where
     /// # Purpose
     /// This function is used in debug mode in the client to check
     /// differences in case of error.
-    pub fn sub(&self, other: &Matrix<T>) -> Matrix<T> {
+    pub fn substract<O: SliceOrVec<T>>(&self, other: &MatrixTemp<T, O>) -> Matrix<T> {
 
         assert_eq!(self.rows, other.rows);
         assert_eq!(self.cols, other.cols);
@@ -649,7 +656,6 @@ PartialEq<MatrixTemp<T, V>> for MatrixTemp<T, U>
             && **rguard1 == **rguard2;
     }
 }
-
 
 /// Helper for print
 impl<T: Numeric64> std::fmt::Display for Matrix<T> {

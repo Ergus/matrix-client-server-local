@@ -133,7 +133,7 @@ fn main() -> nix::Result<()>
         println!("Received!");
 
         if received != *transpose {
-            let difference = received.sub(&transpose);
+            let difference = received.substract(&transpose);
 
             for i in 0..rows {
                 for j in 0..cols {

@@ -2,7 +2,6 @@ use std::{ptr,cmp,slice};
 use std::sync::{Arc, RwLock};
 use std::ffi::c_void;
 
- use std::borrow::Cow;
 use rand::Rng;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -46,9 +45,23 @@ impl Numeric64 for f64 {
     fn one() -> Self { 1.0 }
 }
 
+/// Trait to limit to slice or vector only
+pub trait SliceOrVec<T: Numeric64>:
+    std::ops::Deref<Target = [T]> +
+    std::ops::DerefMut<Target = [T]> +
+    Sync +
+    Send +
+    std::cmp::PartialEq
+{}
+
+impl<T: Numeric64> SliceOrVec<T> for Vec<T> {}
+impl<T: Numeric64> SliceOrVec<T> for &mut [T] {}
+
+
 #[derive(Debug, Clone)]
-pub struct Matrix<'a, T>
-where T: Numeric64
+pub struct MatrixTemp<T, S>
+where T: Numeric64,
+      S: SliceOrVec<T>
 {
     /// Number of rows
     rows: usize,
@@ -57,8 +70,13 @@ where T: Numeric64
     cols: usize,
 
     /// The matrix data stored in an Arc
-    data: Arc<RwLock<Cow<'a, [T]>>>,
+    data: Arc<RwLock<S>>,
+
+    _phantom: std::marker::PhantomData<T>,
 }
+
+pub type Matrix<T> = MatrixTemp<T, Vec<T>>;
+pub type MatrixBorrow<'a, T> = MatrixTemp<T, &'a mut [T]>;
 
 
 /// A matrix class of 64 bits numbers.
@@ -71,78 +89,15 @@ where T: Numeric64
 ///
 /// The main function to use in the final application may be the
 /// parallel version.
-impl<T> Matrix<'_, T>
+impl<T, S> MatrixTemp<T, S>
 where
-    T: Numeric64, Standard: Distribution<T>
+    T: Numeric64,
+    S: SliceOrVec<T>,
+    Standard: Distribution<T>,
+
 {
     /// Default block dimension to use for temporal buffers.
     const BLOCKDIM: usize = 64;  // This si a simple empiric value, we may tune it.
-
-    /// Basic constructor to create an empty matrix
-    pub fn new(rows: usize, cols: usize) -> Self
-    {
-        let vec = vec![T::default(); rows * cols];
-
-        Self {
-            rows,
-            cols,
-            data: Arc::new(RwLock::new(Cow::Owned(vec))),
-        }
-    }
-
-    /// Constructor to generate the matrix based on an iteration function.
-    /// This is specially useful for the tests
-    pub fn from_fn<F>(rows: usize, cols: usize, mut f: F) -> Self
-    where
-        F: FnMut(usize, usize) -> T,
-    {
-        let mut vec = Vec::with_capacity(rows * cols);
-
-        for i in 0..rows {
-            for j in 0..cols {
-                vec.push(f(i, j));
-            }
-        }
-
-        Self {
-            rows,
-            cols,
-            data: Arc::new(RwLock::new(Cow::Owned(vec)))
-        }
-    }
-
-    /// Function to generate the random matrices.
-    /// This is the function used in the client
-    pub fn random(rows: usize, cols: usize) -> Self
-    {
-        let mut rng = rand::thread_rng();
-
-        let vec = (0..rows * cols).map(|_| rng.gen()).collect();
-
-        Self {
-            rows,
-            cols,
-            data: Arc::new(RwLock::new(Cow::Owned(vec)))
-        }
-    }
-
-    /// Copy the matrix from a memory buffer. Generally used to copy
-    /// from shared memory
-    pub fn from_buffer(buffer: *mut c_void) -> Self
-    {
-        let rows: usize = unsafe { *(buffer as *const usize) };
-        let cols: usize = unsafe { *(buffer.add(8) as *const usize) };
-
-        let slice: &[T] = unsafe {
-            slice::from_raw_parts_mut(buffer.add(16) as *mut T, rows * cols)
-        };
-
-        Self {
-            rows,
-            cols,
-            data: Arc::new(RwLock::new(Cow::Borrowed(slice)))
-        }
-    }
 
     pub fn validate(&self) -> bool
     {
@@ -300,7 +255,7 @@ where
         let copysize: usize = col_end - col_block;
 
         let src: *const T = self.data.read().unwrap().as_ptr();
-        let dst: *mut T = block.data.write().unwrap().to_mut().as_mut_ptr();
+        let dst: *mut T = block.data.write().unwrap().as_mut_ptr();
 
         let mut startdst: usize = 0;
 
@@ -337,7 +292,7 @@ where
 
         let copysize: usize = col_end - col_block;
 
-        let src: *mut T = self.data.write().unwrap().to_mut().as_mut_ptr();
+        let src: *mut T = self.data.write().unwrap().as_mut_ptr();
         let dst: *const T = block.data.read().unwrap().as_ptr();
 
         let mut startdst: usize = 0;
@@ -368,7 +323,7 @@ where
         let mut wguard = self.data.write().unwrap();
 
         unsafe {
-            let slice = slice::from_raw_parts_mut(wguard.to_mut().as_mut_ptr(), wguard.len());
+            let slice = slice::from_raw_parts_mut(wguard.as_mut_ptr(), wguard.len());
 
             for row in 0..self.rows {
                 for col in 0..row {
@@ -382,7 +337,7 @@ where
     }
 
     /// Full transpose for small matrices without blocks.
-    pub fn transpose_small_rectangle(&self) -> Matrix<'static, T>
+    pub fn transpose_small_rectangle(&self) -> Matrix<T>
     {
         assert!(self.rows <= 64, "Small rectangle tranpose rows must not exceed 64");
         assert!(self.cols <= 64, "Small rectangle tranpose rows must not exceed 64");
@@ -394,7 +349,7 @@ where
             let mut twguard = transpose.data.write().unwrap();
 
             let rslice = slice::from_raw_parts(rguard.as_ptr(), rguard.len());
-            let wslice = slice::from_raw_parts_mut(twguard.to_mut().as_mut_ptr(), rguard.len());
+            let wslice = slice::from_raw_parts_mut(twguard.as_mut_ptr(), rguard.len());
 
             for row in 0..self.rows {
                 for col in 0..self.cols {
@@ -414,7 +369,7 @@ where
     ///
     /// The transposition is performed then within the cache and
     /// written back to the main memory in cache frienly order again.
-    pub fn transpose_big(&self, blocksize: usize) -> Matrix<'static, T>
+    pub fn transpose_big(&self, blocksize: usize) -> Matrix<T>
     {
         let mut transposed = Matrix::<T>::new(self.cols, self.rows);
 
@@ -434,7 +389,7 @@ where
 
     /// Full transpose for big matrices with blocks and threads.
     /// This version user fair static dispatch 
-    pub fn transpose_parallel_static(&self, blocksize: usize) -> Matrix<'static, T>
+    pub fn transpose_parallel_static(&self, blocksize: usize) -> Matrix<T>
     {
         // This si not the best approach for this because modern codes
         // have different speed which implies that using all the cores
@@ -462,7 +417,6 @@ where
                     break;
                 }
 
-                let cself = self.clone();
                 let mut ctran = transposed.clone();
 
                 let _ = s.spawn(move || {
@@ -476,7 +430,7 @@ where
                         let first_row = (blockid / blocks_cols) * blocksize;
                         let first_col = (blockid % blocks_cols) * blocksize;
 
-                        cself.copy_to_block(&mut block, first_row, first_col);
+                        self.copy_to_block(&mut block, first_row, first_col);
                         block.transpose_small_square_inplace();
                         ctran.copy_from_block(&block, first_col, first_row);
                     }
@@ -491,7 +445,7 @@ where
     /// Full transpose for big matrices with blocks and threads.
     /// This version uses dynamic dispatch to solve potential imbalances
     /// when the host cores have different speed
-    pub fn transpose_parallel_dynamic(&self, blocksize: usize) -> Matrix<'static, T>
+    pub fn transpose_parallel_dynamic(&self, blocksize: usize) -> Matrix<T>
     {
         let n_threads
             = std::thread::available_parallelism().unwrap().get();
@@ -512,7 +466,6 @@ where
                     break;
                 }
 
-                let cself = self.clone();
                 let mut ctran = transposed.clone();
                 let counter_ref = &counter;
 
@@ -529,7 +482,7 @@ where
                         let first_row = (blockid / blocks_cols) * blocksize;
                         let first_col = (blockid % blocks_cols) * blocksize;
 
-                        cself.copy_to_block(&mut block, first_row, first_col);
+                        self.copy_to_block(&mut block, first_row, first_col);
                         block.transpose_small_square_inplace();
                         ctran.copy_from_block(&block, first_col, first_row);
                     }
@@ -554,7 +507,7 @@ where
     ///
     /// Otherwise we use BLOCKDIM x BLOCKDIM
     /// BLOCKDIM = 64 by default (hardcoded)
-    pub fn transpose(&self) -> Matrix<'static, T>
+    pub fn transpose(&self) -> Matrix<T>
     {
         if self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM {
             return self.transpose_small_rectangle();
@@ -578,7 +531,7 @@ where
     /// # Purpose
     /// This function is used in debug mode in the client to check
     /// differences in case of error.
-    pub fn sub(&self, other: &Matrix<T>) -> Matrix<'static, T> {
+    pub fn sub(&self, other: &Matrix<T>) -> Matrix<T> {
 
         assert_eq!(self.rows, other.rows);
         assert_eq!(self.cols, other.cols);
@@ -594,22 +547,112 @@ where
     }
 }
 
-/// Operator ==
-impl<T: Numeric64> PartialEq<Matrix<'_, T>> for Matrix<'_, T> {
 
-    fn eq(&self, other: &Matrix<T>) -> bool {
+impl<T> Matrix<T>
+where
+    T: Numeric64,
+    Standard: Distribution<T>,
+
+{
+    /// Basic constructor to create an empty matrix
+    pub fn new(rows: usize, cols: usize) -> Self
+    {
+        let vec = vec![T::default(); rows * cols];
+
+        Self {
+            rows,
+            cols,
+            data: Arc::new(RwLock::new(vec)),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Constructor to generate the matrix based on an iteration function.
+    /// This is specially useful for the tests
+    pub fn from_fn<F>(rows: usize, cols: usize, mut f: F) -> Self
+    where
+        F: FnMut(usize, usize) -> T,
+    {
+        let mut vec = Vec::with_capacity(rows * cols);
+
+        for i in 0..rows {
+            for j in 0..cols {
+                vec.push(f(i, j));
+            }
+        }
+
+        Self {
+            rows,
+            cols,
+            data: Arc::new(RwLock::new(vec)),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Function to generate the random matrices.
+    /// This is the function used in the client
+    pub fn random(rows: usize, cols: usize) -> Self
+    {
+        let mut rng = rand::thread_rng();
+
+        let vec = (0..rows * cols).map(|_| rng.gen()).collect();
+
+        Self {
+            rows,
+            cols,
+            data: Arc::new(RwLock::new(vec)),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> MatrixBorrow<'_, T>
+where
+    T: Numeric64,
+    Standard: Distribution<T>,
+
+{
+    /// Copy the matrix from a memory buffer. Generally used to copy
+    /// from shared memory
+    pub fn from_buffer(buffer: *mut c_void) -> Self
+    {
+        let rows: usize = unsafe { *(buffer as *const usize) };
+        let cols: usize = unsafe { *(buffer.add(8) as *const usize) };
+
+        let slice: &mut [T] = unsafe {
+            slice::from_raw_parts_mut(buffer.add(16) as *mut T, rows * cols)
+        };
+
+        Self {
+            rows,
+            cols,
+            data: Arc::new(RwLock::new(slice)),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Operator ==
+impl<T: Numeric64,
+    U: SliceOrVec<T>,
+    V: SliceOrVec<T>>
+PartialEq<MatrixTemp<T, V>> for MatrixTemp<T, U>
+{
+
+    fn eq(&self, other: &MatrixTemp<T, V>) -> bool
+    {
         let rguard1 = self.data.read().unwrap();
         let rguard2 = other.data.read().unwrap();
 
         return self.rows == other.rows
             && self.cols == other.cols
-            && *rguard1 == *rguard2;
+            && **rguard1 == **rguard2;
     }
 }
 
 
 /// Helper for print
-impl<T: Numeric64> std::fmt::Display for Matrix<'_, T> {
+impl<T: Numeric64> std::fmt::Display for Matrix<T> {
 
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 
@@ -627,7 +670,7 @@ impl<T: Numeric64> std::fmt::Display for Matrix<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::Matrix;
+    use super::*;
 
     use std::alloc::{alloc, dealloc, Layout};
     use std::ffi::c_void;
@@ -662,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_from_buffer()
+    fn test_matrix_borrow_from_buffer()
     {
         let rows = 512;
         let cols = 1024;
@@ -690,7 +733,7 @@ mod tests {
                 data[i] = i as f64;
             }
 
-            let matrix = Matrix::<f64>::from_buffer(ptr);
+            let matrix = MatrixBorrow::<f64>::from_buffer(ptr);
 
             assert_eq!(matrix.rows(), rows);
             assert_eq!(matrix.cols(), cols);
@@ -796,6 +839,24 @@ mod tests {
     }
 
     #[test]
+    fn test_matrix_transpose_small_square()
+    {
+        let mut matrix = Matrix::from_fn(8, 8, |i, j| i * 8 + j);
+        let transpose = matrix.transpose_small_rectangle();
+        assert_ne!(matrix, transpose);
+
+        matrix.transpose_small_square_inplace();
+        assert_eq!(matrix, transpose);
+
+        // Verify all elements
+        for i in 0..8 {
+            for j in 0..8 {
+                assert_eq!(matrix.get(i, j), i + j * 8);
+            }
+        }
+    }
+
+    #[test]
     fn test_matrix_transpose_small_rectangle()
     {
         let matrix = Matrix::from_fn(16, 8, |i, j| i * 8 + j);
@@ -853,7 +914,7 @@ mod tests {
 
     fn test_matrix_transpose<F>(test_fun: F, rows: usize, cols: usize)
     where
-       F: for<'a> Fn(&'a Matrix<'a, usize>, usize) -> Matrix<'static, usize>
+       F: Fn(&Matrix<usize>, usize) -> Matrix<usize>
     {
         let matrix = Matrix::from_fn(rows, cols, |i, j| i * cols + j);
         assert!(matrix.validate());

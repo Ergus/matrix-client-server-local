@@ -7,7 +7,7 @@ use nix::sys::stat::Mode;
 use std::ptr;
 use std::os::unix::io::RawFd;
 
-use crate::Matrix;
+use crate::{Matrix, MatrixBorrow};
 use std::ffi::{c_void, CString};
 
 /// A class to perform matrix interchange between processes.
@@ -120,9 +120,9 @@ impl SharedBuffer<'_> {
     }
 
     /// Effectively read the matrix from the shared payload
-    pub fn receive(&mut self) -> Matrix<f64>
+    pub fn receive(&mut self) -> MatrixBorrow::<f64>
     {
-        Matrix::<f64>::from_buffer(self.payload)
+        MatrixBorrow::<f64>::from_buffer(self.payload)
     }
 
 }

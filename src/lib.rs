@@ -1,6 +1,6 @@
 mod matrix;
 
-pub use matrix::Matrix;
+pub use matrix::{Matrix, MatrixBorrow};
 
 mod server_lib;
 pub use server_lib::{Server, Client};

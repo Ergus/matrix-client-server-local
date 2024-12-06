@@ -1,6 +1,6 @@
 use std::os::{unix::io::AsRawFd, fd::RawFd};
 
-use crate::{Matrix, SharedBuffer, stats};
+use crate::{Matrix, MatrixBorrow, SharedBuffer, stats};
 
 /// A server class to construct from server instances.
 ///
@@ -68,7 +68,7 @@ impl Server {
 
             let matrix = { // Read Matrix from shared memory
                 let mut __guard = stats::TimeGuard::new("CopyIn");
-                let matrix = Matrix::<f64>::from_buffer(shared_buffer.payload);
+                let matrix = MatrixBorrow::<f64>::from_buffer(shared_buffer.payload);
 
                 // When we receive an empty matrix, then we break this thread and exit.
                 if matrix.datalen() == 0 {

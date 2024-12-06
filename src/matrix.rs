@@ -638,7 +638,7 @@ where
     }
 
 
-    pub fn update_from_matrix<O: SliceOrVec<T>>(&mut self, other: MatrixTemp<T, O>, par: bool)
+    pub fn update_from_matrix<O: SliceOrVec<T>>(&mut self, other: &MatrixTemp<T, O>, par: bool)
     {
         self.rows = other.rows;
         self.cols = other.cols;
@@ -689,163 +689,14 @@ impl<T: Numeric64> std::fmt::Display for Matrix<T> {
 }
 
 #[cfg(test)]
-mod tests {
+mod matrixtemp {
     use super::*;
 
     use std::alloc::{alloc, dealloc, Layout};
     use std::ffi::c_void;
 
     #[test]
-    fn test_matrix_constructor()
-    {
-        let matrix = Matrix::<i64>::new(3, 4);
-
-        // Verify dimensions
-        assert_eq!(matrix.rows(), 3);
-        assert_eq!(matrix.cols(), 4);
-        assert_eq!(matrix.datalen(), 4 * 3);
-
-        // Verify all elements are zero
-        for i in 0..3 {
-            for j in 0..4 {
-                assert_eq!(matrix.get(i, j), 0);
-            }
-        }
-    }
-
-    #[test]
-    fn test_matrix_debug()
-    {
-        let matrix = Matrix::from_fn(2, 2, |i, j| i * j);
-        let debug_output = format!("{:?}", matrix);
-
-        // Ensure debug string is as expected
-        assert!(debug_output.contains("Matrix"));
-        assert!(debug_output.contains("data:"));
-    }
-
-    #[test]
-    fn test_matrix_borrow_from_buffer()
-    {
-        let rows = 512;
-        let cols = 1024;
-
-        let nelems = rows * cols;
-
-        // Calculate the total size: 2 u64s for rows and cols, then the f64 data
-        let data_layout = Layout::array::<f64>(2 + nelems).expect("Layout creation failed");
-
-        unsafe {
-            let ptr = alloc(data_layout) as *mut c_void;
-
-            if ptr.is_null() {
-                panic!("Memory allocation failed!");
-            }
-
-
-            let hdr_ptr = ptr as *mut u64;
-            std::ptr::write(hdr_ptr, rows as u64);
-            std::ptr::write(hdr_ptr.add(1), cols as u64);
-
-            let data = std::slice::from_raw_parts_mut(hdr_ptr.add(2) as *mut f64, nelems);
-
-            for i in 0..nelems {
-                data[i] = i as f64;
-            }
-
-            let matrix = MatrixBorrow::<f64>::from_buffer(ptr);
-
-            assert_eq!(matrix.rows(), rows);
-            assert_eq!(matrix.cols(), cols);
-            assert_eq!(matrix.datalen(), nelems);
-
-            for i in 0..rows {
-                for j in 0..cols {
-                    assert_eq!(matrix.get(i, j), (i * cols + j) as f64);
-                }
-            }
-
-
-            dealloc(ptr as *mut u8, data_layout);
-
-        }
-    }
-
-    fn matrix_borrow_update(parallel: bool)
-    {
-        let rows = 512;
-        let cols = 1024;
-
-        let nelems = rows * cols;
-
-        // Calculate the total size: 2 u64s for rows and cols, then the f64 data
-        let data_layout = Layout::array::<f64>(2 + nelems).expect("Layout creation failed");
-
-        unsafe {
-            let ptr = alloc(data_layout) as *mut c_void;
-
-            if ptr.is_null() {
-                panic!("Memory allocation failed!");
-            }
-
-
-            let hdr_ptr = ptr as *mut u64;
-            std::ptr::write(hdr_ptr, rows as u64);
-            std::ptr::write(hdr_ptr.add(1), cols as u64);
-
-            let data = std::slice::from_raw_parts_mut(hdr_ptr.add(2) as *mut f64, nelems);
-
-            for i in 0..nelems {
-                data[i] = i as f64;
-            }
-
-            let mut matrix = MatrixBorrow::<f64>::from_buffer(ptr);
-
-            assert_eq!(matrix.rows(), rows);
-            assert_eq!(matrix.cols(), cols);
-            assert_eq!(matrix.datalen(), nelems);
-
-            for i in 0..rows {
-                for j in 0..cols {
-                    assert_eq!(matrix.get(i, j), (i * cols + j) as f64);
-                }
-            }
-
-            // Transpose to have something to check
-            let transposed = matrix.transpose_big(64);
-            matrix.update_from_matrix(transposed, parallel);
-
-            // Check matrix indices
-            for i in 0..cols {
-                for j in 0..rows {
-                    assert_eq!(matrix.get(i, j), (j * cols + i) as f64);
-                }
-            }
-
-            // Check the underlying vector
-            for i in 0..nelems {
-                assert_eq!(data[i], ((i / rows) + (i % rows) * cols) as f64);
-            }
-
-            dealloc(ptr as *mut u8, data_layout);
-
-        }
-    }
-
-    #[test]
-    fn matrix_borrow_update_seq()
-    {
-        matrix_borrow_update(false);
-    }
-
-    #[test]
-    fn matrix_borrow_update_par()
-    {
-        matrix_borrow_update(true);
-    }
-
-    #[test]
-    fn test_matrix_to_buffer_seq()
+    fn matrix_to_buffer_seq()
     {
         let rows = 512;
         let cols = 1024;
@@ -881,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_to_buffer_par()
+    fn matrix_to_buffer_par()
     {
         let rows = 512;
         let cols = 1024;
@@ -918,7 +769,7 @@ mod tests {
 
 
     #[test]
-    fn test_matrix_transpose_small_square_inplace()
+    fn matrix_transpose_small_square_inplace()
     {
         let mut matrix = Matrix::from_fn(8, 8, |i, j| i * 8 + j);
         matrix.transpose_small_square_inplace();
@@ -932,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_small_square()
+    fn matrix_transpose_small_square()
     {
         let mut matrix = Matrix::from_fn(8, 8, |i, j| i * 8 + j);
         let transpose = matrix.transpose_small_rectangle();
@@ -950,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_small_rectangle()
+    fn matrix_transpose_small_rectangle()
     {
         let matrix = Matrix::from_fn(16, 8, |i, j| i * 8 + j);
         let out = matrix.transpose_small_rectangle();
@@ -964,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_copy_to_block()
+    fn matrix_copy_to_block()
     {
         let matrix = Matrix::from_fn(64, 64, |i, j| ((i / 8) * 8 + (j / 8)));
 
@@ -979,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_from_to_block()
+    fn matrix_from_to_block()
     {
         let mut matrix = Matrix::<usize>::new(64, 64);
 
@@ -1025,7 +876,7 @@ mod tests {
 
 
     #[test]
-    fn test_matrix_transpose_big_squared()
+    fn matrix_transpose_big_squared()
     {
         test_matrix_transpose(
             |mat: &Matrix<usize>, bsize: usize| mat.transpose_big(bsize),
@@ -1034,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_big_heigh()
+    fn matrix_transpose_big_heigh()
     {
         test_matrix_transpose(
             |mat: &Matrix<usize>, bsize: usize| mat.transpose_big(bsize),
@@ -1043,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_big_width()
+    fn matrix_transpose_big_width()
     {
         test_matrix_transpose(
             |mat: &Matrix<usize>, bsize: usize| mat.transpose_big(bsize),
@@ -1052,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_big_parallel_static_high()
+    fn matrix_transpose_big_parallel_static_high()
     {
         test_matrix_transpose(
             |mat: &Matrix<usize>, bsize: usize|  mat.transpose_parallel_static(bsize),
@@ -1061,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_big_parallel_static_width()
+    fn matrix_transpose_big_parallel_static_width()
     {
         test_matrix_transpose(
             |mat: &Matrix<usize>, bsize: usize|  mat.transpose_parallel_static(bsize),
@@ -1070,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_big_parallel_dynamic_high()
+    fn matrix_transpose_big_parallel_dynamic_high()
     {
         test_matrix_transpose(
             |mat: &Matrix<usize>, bsize: usize|  mat.transpose_parallel_dynamic(bsize),
@@ -1079,11 +930,180 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_transpose_big_parallel_dynamic_width()
+    fn matrix_transpose_big_parallel_dynamic_width()
     {
         test_matrix_transpose(
             |mat: &Matrix<usize>, bsize: usize|  mat.transpose_parallel_dynamic(bsize),
             256, 512
         );
     }
+}
+
+
+#[cfg(test)]
+mod matrix {
+
+    use super::*;
+
+    #[test]
+    fn constructor()
+    {
+        let matrix = Matrix::<i64>::new(3, 4);
+
+        // Verify dimensions
+        assert_eq!(matrix.rows(), 3);
+        assert_eq!(matrix.cols(), 4);
+        assert_eq!(matrix.datalen(), 4 * 3);
+
+        // Verify all elements are zero
+        for i in 0..3 {
+            for j in 0..4 {
+                assert_eq!(matrix.get(i, j), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn debug()
+    {
+        let matrix = Matrix::from_fn(2, 2, |i, j| i * j);
+        let debug_output = format!("{:?}", matrix);
+
+        // Ensure debug string is as expected
+        assert!(debug_output.contains("Matrix"));
+        assert!(debug_output.contains("data:"));
+    }
+
+}
+
+#[cfg(test)]
+mod matrix_borrow{
+
+    use super::*;
+    use std::alloc::{alloc, dealloc, Layout};
+
+
+    #[test]
+    fn from_buffer()
+    {
+        let rows = 512;
+        let cols = 1024;
+
+        let nelems = rows * cols;
+
+        // Calculate the total size: 2 u64s for rows and cols, then the f64 data
+        let data_layout = Layout::array::<f64>(2 + nelems).expect("Layout creation failed");
+
+        unsafe {
+            let ptr = alloc(data_layout) as *mut c_void;
+
+            if ptr.is_null() {
+                panic!("Memory allocation failed!");
+            }
+
+
+            let hdr_ptr = ptr as *mut u64;
+            std::ptr::write(hdr_ptr, rows as u64);
+            std::ptr::write(hdr_ptr.add(1), cols as u64);
+
+            let data = std::slice::from_raw_parts_mut(hdr_ptr.add(2) as *mut f64, nelems);
+
+            for i in 0..nelems {
+                data[i] = i as f64;
+            }
+
+            let matrix = MatrixBorrow::<f64>::from_buffer(ptr);
+
+            assert_eq!(matrix.rows(), rows);
+            assert_eq!(matrix.cols(), cols);
+            assert_eq!(matrix.datalen(), nelems);
+
+            for i in 0..rows {
+                for j in 0..cols {
+                    assert_eq!(matrix.get(i, j), (i * cols + j) as f64);
+                }
+            }
+
+
+            dealloc(ptr as *mut u8, data_layout);
+
+        }
+    }
+
+    fn update_from_matrix(parallel: bool)
+    {
+        let rows = 512;
+        let cols = 1024;
+
+        let nelems = rows * cols;
+
+        // Calculate the total size: 2 u64s for rows and cols, then the f64 data
+        let data_layout = Layout::array::<f64>(2 + nelems).expect("Layout creation failed");
+
+        unsafe {
+            let ptr = alloc(data_layout) as *mut c_void;
+
+            if ptr.is_null() {
+                panic!("Memory allocation failed!");
+            }
+
+
+            let hdr_ptr = ptr as *mut u64;
+            std::ptr::write(hdr_ptr, rows as u64);
+            std::ptr::write(hdr_ptr.add(1), cols as u64);
+
+            let data = std::slice::from_raw_parts_mut(hdr_ptr.add(2) as *mut f64, nelems);
+
+            for i in 0..nelems {
+                data[i] = i as f64;
+            }
+
+            let mut matrix = MatrixBorrow::<f64>::from_buffer(ptr);
+
+            assert_eq!(matrix.rows(), rows);
+            assert_eq!(matrix.cols(), cols);
+            assert_eq!(matrix.datalen(), nelems);
+
+            for i in 0..rows {
+                for j in 0..cols {
+                    assert_eq!(matrix.get(i, j), (i * cols + j) as f64);
+                }
+            }
+
+            // Transpose to have something to check
+            let transposed = matrix.transpose_big(64);
+            matrix.update_from_matrix(&transposed, parallel);
+
+            // Check matrix indices
+            for i in 0..cols {
+                for j in 0..rows {
+                    assert_eq!(matrix.get(i, j), (j * cols + i) as f64);
+                }
+            }
+
+            // Check the whole matrix (including rows and cols).
+            assert_eq!(matrix, transposed);
+
+            // Check the underlying vector
+            for i in 0..nelems {
+                assert_eq!(data[i], ((i / rows) + (i % rows) * cols) as f64);
+            }
+
+            dealloc(ptr as *mut u8, data_layout);
+
+        }
+    }
+
+    #[test]
+    fn update_from_matrix_seq()
+    {
+        update_from_matrix(false);
+    }
+
+    #[test]
+    fn update_from_matrix_par()
+    {
+        update_from_matrix(true);
+    }
+
 }

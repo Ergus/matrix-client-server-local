@@ -232,7 +232,7 @@ where
 
             ptr::copy_nonoverlapping(
                 rguard.as_ptr(),
-                buffer.add(2 * size_of::<usize>()) as *mut T,
+                buffer.byte_add(2 * size_of::<usize>()) as *mut T,
                 self.rows * self.cols
             );
         }
@@ -697,6 +697,9 @@ impl<T: std::fmt::Debug> std::fmt::Display for Matrix<'_, T> {
 mod tests {
     use super::Matrix;
 
+    use std::alloc::{alloc, dealloc, Layout};
+    use std::ffi::c_void;
+
     #[test]
     fn test_matrix_constructor()
     {
@@ -724,6 +727,125 @@ mod tests {
         // Ensure debug string is as expected
         assert!(debug_output.contains("Matrix"));
         assert!(debug_output.contains("data:"));
+    }
+
+    #[test]
+    fn test_matrix_from_buffer()
+    {
+        let rows = 512;
+        let cols = 1024;
+
+        let nelems = rows * cols;
+
+        // Calculate the total size: 2 u64s for rows and cols, then the f64 data
+        let data_layout = Layout::array::<f64>(2 + nelems).expect("Layout creation failed");
+
+        unsafe {
+            let ptr = alloc(data_layout) as *mut c_void;
+
+            if ptr.is_null() {
+                panic!("Memory allocation failed!");
+            }
+
+
+            let hdr_ptr = ptr as *mut u64;
+            std::ptr::write(hdr_ptr, rows as u64);
+            std::ptr::write(hdr_ptr.add(1), cols as u64);
+
+            let data = std::slice::from_raw_parts_mut(hdr_ptr.add(2) as *mut f64, nelems);
+
+            for i in 0..nelems {
+                data[i] = i as f64;
+            }
+
+            let matrix = Matrix::<f64>::from_buffer(ptr);
+
+            assert_eq!(matrix.rows(), rows);
+            assert_eq!(matrix.cols(), cols);
+            assert_eq!(matrix.datalen(), nelems);
+
+            for i in 0..rows {
+                for j in 0..cols {
+                    assert_eq!(matrix.get(i, j), (i * cols + j) as f64);
+                }
+            }
+
+
+            dealloc(ptr as *mut u8, data_layout);
+
+        }
+    }
+
+
+    #[test]
+    fn test_matrix_to_buffer_seq()
+    {
+        let rows = 512;
+        let cols = 1024;
+
+        let nelems = rows * cols;
+
+        let matrix = Matrix::from_fn(rows, cols, |i, j| (i * cols + j) as f64);
+        let data_layout = Layout::array::<f64>(2 + nelems).expect("Layout creation failed");
+
+        unsafe {
+
+            // Calculate the total size: 2 u64s for rows and cols, then the f64 data
+            let ptr = alloc(data_layout) as *mut c_void;
+
+            if ptr.is_null() {
+                panic!("Memory allocation failed!");
+            }
+
+            matrix.to_buffer_seq(ptr);
+
+            let hdr_ptr = ptr as *const usize;
+            assert_eq!(std::ptr::read(hdr_ptr), rows as usize);
+            assert_eq!(std::ptr::read(hdr_ptr.add(1)), cols as usize);
+
+            let data = std::slice::from_raw_parts(hdr_ptr.add(2) as *const f64, nelems);
+
+            for i in 0..nelems {
+                assert_eq!(data[i], i as f64);
+            }
+
+            dealloc(ptr as *mut u8, data_layout);
+        }
+    }
+
+    #[test]
+    fn test_matrix_to_buffer_par()
+    {
+        let rows = 512;
+        let cols = 1024;
+
+        let nelems = rows * cols;
+
+        let matrix = Matrix::from_fn(rows, cols, |i, j| (i * cols + j) as f64);
+        let data_layout = Layout::array::<f64>(2 + nelems).expect("Layout creation failed");
+
+        unsafe {
+
+            let ptr = alloc(data_layout) as *mut c_void;
+
+            if ptr.is_null() {
+                panic!("Memory allocation failed!");
+            }
+
+            matrix.to_buffer_parallel(ptr);
+
+            let hdr_ptr = ptr as *mut u64;
+            assert_eq!(std::ptr::read(hdr_ptr), rows as u64);
+            assert_eq!(std::ptr::read(hdr_ptr.add(1)), cols as u64);
+
+            let data = std::slice::from_raw_parts(hdr_ptr.add(2) as *const f64, nelems);
+
+            for i in 0..nelems {
+                assert_eq!(data[i], i as f64);
+            }
+
+            dealloc(ptr as *mut u8, data_layout);
+        }
     }
 
 

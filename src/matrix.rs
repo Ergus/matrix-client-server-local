@@ -2,6 +2,7 @@ use std::{ptr,cmp,slice};
 use std::sync::{Arc, RwLock};
 use std::ffi::c_void;
 
+ use std::borrow::Cow;
 use rand::Rng;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -24,7 +25,7 @@ pub trait Numeric64:
     Sized + 
     std::fmt::Debug + 
     Copy +
-    PartialEq + 
+    std::cmp::PartialEq + 
     PartialOrd +
     Default +
     Send +
@@ -45,76 +46,10 @@ impl Numeric64 for f64 {
     fn one() -> Self { 1.0 }
 }
 
-#[derive(Debug)]
-enum Storage<'a, T> {
-    VecData(Vec<T>),
-    SliceData(&'a [T]),
-}
-
-impl<'a, T> Storage<'a, T>
-{
-    pub fn iter(&self) -> std::slice::Iter<'_, T> {
-        match self {
-            Storage::VecData(vec) => vec.iter(),
-            Storage::SliceData(slice) => slice.iter(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            Storage::VecData(vec) => vec.len(),
-            Storage::SliceData(slice) => slice.len(),
-        }
-    }
-
-    pub fn as_ptr(&self) -> *const T {
-        match self {
-            Storage::VecData(vec) => vec.as_ptr(),
-            Storage::SliceData(slice) => slice.as_ptr(),
-        }
-    }
-
-    pub fn as_mut_ptr(&mut self) -> *mut T {
-        match self {
-            Storage::VecData(vec) => vec.as_mut_ptr(),
-            Storage::SliceData(slice) => {
-                // Safety note: This is only safe if the slice is not
-                // empty and the caller ensures no mutation of the
-                // original slice
-                if slice.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    slice.as_ptr() as *mut T
-                }
-            }
-        }
-    }
-
-    pub fn as_slice(&self) -> &[T] {
-        match self {
-            Storage::VecData(vec) => vec.as_slice(),
-            Storage::SliceData(slice) => slice
-        }
-    }
-
-    // pub fn get(&self, idx: usize) -> T
-    // {
-    //     match self {
-    //         Storage::VecData(vec) => vec[idx],
-    //         Storage::SliceData(slice) => slice[idx]
-    //     }
-    // }
-}
-
-/// Operator ==
-impl<T: std::cmp::PartialEq> PartialEq<Storage<'_, T>> for Storage<'_, T> {
-    fn eq(&self, other: &Storage<T>) -> bool {
-        self.as_slice() == other.as_slice()
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct Matrix<'a, T> {
+pub struct Matrix<'a, T>
+where T: Numeric64
+{
     /// Number of rows
     rows: usize,
 
@@ -122,7 +57,7 @@ pub struct Matrix<'a, T> {
     cols: usize,
 
     /// The matrix data stored in an Arc
-    data: Arc<RwLock<Storage<'a, T>>>,
+    data: Arc<RwLock<Cow<'a, [T]>>>,
 }
 
 
@@ -151,7 +86,7 @@ where
         Self {
             rows,
             cols,
-            data: Arc::new(RwLock::new(Storage::VecData(vec))),
+            data: Arc::new(RwLock::new(Cow::Owned(vec))),
         }
     }
 
@@ -172,7 +107,7 @@ where
         Self {
             rows,
             cols,
-            data: Arc::new(RwLock::new(Storage::VecData(vec)))
+            data: Arc::new(RwLock::new(Cow::Owned(vec)))
         }
     }
 
@@ -187,7 +122,7 @@ where
         Self {
             rows,
             cols,
-            data: Arc::new(RwLock::new(Storage::VecData(vec)))
+            data: Arc::new(RwLock::new(Cow::Owned(vec)))
         }
     }
 
@@ -205,7 +140,7 @@ where
         Self {
             rows,
             cols,
-            data: Arc::new(RwLock::new(Storage::SliceData(slice)))
+            data: Arc::new(RwLock::new(Cow::Borrowed(slice)))
         }
     }
 
@@ -358,13 +293,14 @@ where
     fn copy_to_block(&self, block: &mut Matrix<T>, row_block: usize, col_block: usize)
     {
         //assert_eq!(block.rows, block.cols, "block must be squared");
+        // debug_assert!(block.data.write().unwrap().is_owned()); // This is unstable
 
         let row_end: usize = (row_block + block.rows()).min(self.rows);
         let col_end: usize = (col_block + block.cols()).min(self.cols);
         let copysize: usize = col_end - col_block;
 
         let src: *const T = self.data.read().unwrap().as_ptr();
-        let dst: *mut T = block.data.write().unwrap().as_mut_ptr();
+        let dst: *mut T = block.data.write().unwrap().to_mut().as_mut_ptr();
 
         let mut startdst: usize = 0;
 
@@ -401,7 +337,7 @@ where
 
         let copysize: usize = col_end - col_block;
 
-        let src: *mut T = self.data.write().unwrap().as_mut_ptr();
+        let src: *mut T = self.data.write().unwrap().to_mut().as_mut_ptr();
         let dst: *const T = block.data.read().unwrap().as_ptr();
 
         let mut startdst: usize = 0;
@@ -432,7 +368,7 @@ where
         let mut wguard = self.data.write().unwrap();
 
         unsafe {
-            let slice = slice::from_raw_parts_mut(wguard.as_mut_ptr(), wguard.len());
+            let slice = slice::from_raw_parts_mut(wguard.to_mut().as_mut_ptr(), wguard.len());
 
             for row in 0..self.rows {
                 for col in 0..row {
@@ -446,7 +382,7 @@ where
     }
 
     /// Full transpose for small matrices without blocks.
-    pub fn transpose_small_rectangle(&self) -> Matrix<T>
+    pub fn transpose_small_rectangle(&self) -> Matrix<'static, T>
     {
         assert!(self.rows <= 64, "Small rectangle tranpose rows must not exceed 64");
         assert!(self.cols <= 64, "Small rectangle tranpose rows must not exceed 64");
@@ -458,7 +394,7 @@ where
             let mut twguard = transpose.data.write().unwrap();
 
             let rslice = slice::from_raw_parts(rguard.as_ptr(), rguard.len());
-            let wslice = slice::from_raw_parts_mut(twguard.as_mut_ptr(), rguard.len());
+            let wslice = slice::from_raw_parts_mut(twguard.to_mut().as_mut_ptr(), rguard.len());
 
             for row in 0..self.rows {
                 for col in 0..self.cols {
@@ -478,7 +414,7 @@ where
     ///
     /// The transposition is performed then within the cache and
     /// written back to the main memory in cache frienly order again.
-    pub fn transpose_big(&self, blocksize: usize) -> Matrix<T>
+    pub fn transpose_big(&self, blocksize: usize) -> Matrix<'static, T>
     {
         let mut transposed = Matrix::<T>::new(self.cols, self.rows);
 
@@ -498,7 +434,7 @@ where
 
     /// Full transpose for big matrices with blocks and threads.
     /// This version user fair static dispatch 
-    pub fn transpose_parallel_static(&self, blocksize: usize) -> Matrix<T>
+    pub fn transpose_parallel_static(&self, blocksize: usize) -> Matrix<'static, T>
     {
         // This si not the best approach for this because modern codes
         // have different speed which implies that using all the cores
@@ -555,7 +491,7 @@ where
     /// Full transpose for big matrices with blocks and threads.
     /// This version uses dynamic dispatch to solve potential imbalances
     /// when the host cores have different speed
-    pub fn transpose_parallel_dynamic(&self, blocksize: usize) -> Matrix<T>
+    pub fn transpose_parallel_dynamic(&self, blocksize: usize) -> Matrix<'static, T>
     {
         let n_threads
             = std::thread::available_parallelism().unwrap().get();
@@ -618,7 +554,7 @@ where
     ///
     /// Otherwise we use BLOCKDIM x BLOCKDIM
     /// BLOCKDIM = 64 by default (hardcoded)
-    pub fn transpose(&self) -> Matrix<T>
+    pub fn transpose(&self) -> Matrix<'static, T>
     {
         if self.cols * self.rows < Self::BLOCKDIM * Self::BLOCKDIM {
             return self.transpose_small_rectangle();
@@ -631,7 +567,7 @@ where
     /// Get a matrix value using copy.
     pub fn get(&self, row: usize, col: usize) -> T
     {
-        self.data.read().unwrap().as_slice()[row * self.cols + col]
+        self.data.read().unwrap()[row * self.cols + col]
     }
 
     /// Substract two matrices and obtain another matrix.
@@ -642,7 +578,7 @@ where
     /// # Purpose
     /// This function is used in debug mode in the client to check
     /// differences in case of error.
-    pub fn sub(&self, other: &Matrix<T>) -> Matrix<T> {
+    pub fn sub(&self, other: &Matrix<T>) -> Matrix<'static, T> {
 
         assert_eq!(self.rows, other.rows);
         assert_eq!(self.cols, other.cols);
@@ -650,19 +586,16 @@ where
         let rguard1 = self.data.read().unwrap();
         let rguard2 = other.data.read().unwrap();
 
-        let slice1 = rguard1.as_slice();
-        let slice2 = rguard2.as_slice();
-
         Matrix::<T>::from_fn(
             self.rows,
             self.cols,
-            |i, j| slice1[i * self.cols + j] - slice2[i * self.cols + j]
+            |i, j| rguard1[i * self.cols + j] - rguard2[i * self.cols + j]
         )
     }
 }
 
 /// Operator ==
-impl<T: std::cmp::PartialEq> PartialEq<Matrix<'_, T>> for Matrix<'_, T> {
+impl<T: Numeric64> PartialEq<Matrix<'_, T>> for Matrix<'_, T> {
 
     fn eq(&self, other: &Matrix<T>) -> bool {
         let rguard1 = self.data.read().unwrap();
@@ -676,15 +609,14 @@ impl<T: std::cmp::PartialEq> PartialEq<Matrix<'_, T>> for Matrix<'_, T> {
 
 
 /// Helper for print
-impl<T: std::fmt::Debug> std::fmt::Display for Matrix<'_, T> {
+impl<T: Numeric64> std::fmt::Display for Matrix<'_, T> {
 
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 
         let rguard = self.data.read().unwrap();
-        let gslice = rguard.as_slice();
 
         for i in 0..self.rows {
-            let slice = &gslice[i * self.cols.. (i + 1) * self.cols];
+            let slice = &rguard[i * self.cols.. (i + 1) * self.cols];
 
             write!(f, "{:?}\n", slice)?;  // Format each row and move to the next line
         }
@@ -921,7 +853,7 @@ mod tests {
 
     fn test_matrix_transpose<F>(test_fun: F, rows: usize, cols: usize)
     where
-       F: for<'a> Fn(&'a Matrix<'a, usize>, usize) -> Matrix<'a, usize>
+       F: for<'a> Fn(&'a Matrix<'a, usize>, usize) -> Matrix<'static, usize>
     {
         let matrix = Matrix::from_fn(rows, cols, |i, j| i * cols + j);
         assert!(matrix.validate());

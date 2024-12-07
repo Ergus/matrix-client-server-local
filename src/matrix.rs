@@ -727,7 +727,7 @@ where
 impl<T: Numeric64,
     U: SliceOrVec<T>,
     V: SliceOrVec<T>>
-PartialEq<MatrixTemp<T, V>> for MatrixTemp<T, U>
+std::cmp::PartialEq<MatrixTemp<T, V>> for MatrixTemp<T, U>
 {
 
     fn eq(&self, other: &MatrixTemp<T, V>) -> bool
@@ -742,7 +742,9 @@ PartialEq<MatrixTemp<T, V>> for MatrixTemp<T, U>
 }
 
 /// Helper for print
-impl<T: Numeric64> std::fmt::Display for Matrix<T> {
+impl<T: Numeric64,
+    U: SliceOrVec<T>>
+std::fmt::Display for MatrixTemp<T, U> {
 
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 

@@ -31,7 +31,6 @@ thread_local! {
 
 /// Use a time guard to collect times easier with RAII.
 pub struct TimeGuard {
-    enabled: bool,
     key: String,
     start: Instant,
 }
@@ -39,22 +38,13 @@ pub struct TimeGuard {
 impl TimeGuard {
     pub fn new(key: &str) -> Self
     {
-        Self { enabled: true, key: key.to_string(), start: Instant::now() }
-    }
-
-    pub fn disable(&mut self)
-    {
-        self.enabled = false;
+        Self { key: key.to_string(), start: Instant::now() }
     }
 }
 
 impl Drop for TimeGuard {
     fn drop(&mut self)
     {
-        if !self.enabled {
-            return
-        }
-
         let duration: u128 = self.start.elapsed().as_micros() ;
 
         THREAD_INFO.with(|thread_info| {

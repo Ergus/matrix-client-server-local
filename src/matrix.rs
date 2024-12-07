@@ -708,17 +708,13 @@ where
     }
 
 
-    pub fn update_from_matrix<O: SliceOrVec<T>>(&mut self, other: &MatrixTemp<T, O>, par: bool)
+    pub fn update_from_matrix<O: SliceOrVec<T>>(&mut self, other: &MatrixTemp<T, O>)
     {
         self.rows = other.rows;
         self.cols = other.cols;
         let wguard = self.data.write().unwrap();
         unsafe {
-            if par {
-                other.to_buffer_parallel(wguard.as_ptr().byte_sub(16) as *mut c_void);
-            } else {
-                other.to_buffer_seq(wguard.as_ptr().byte_sub(16) as *mut c_void);
-            }
+            other.to_buffer(wguard.as_ptr().byte_sub(16) as *mut c_void);
         }
     }
 }
@@ -1102,7 +1098,8 @@ mod matrix_borrow{
         }
     }
 
-    fn update_from_matrix(parallel: bool)
+    #[test]
+    fn update_from_matrix()
     {
         let rows = 512;
         let cols = 1024;
@@ -1144,7 +1141,7 @@ mod matrix_borrow{
 
             // Transpose to have something to check
             let transposed = matrix.transpose_big(64);
-            matrix.update_from_matrix(&transposed, parallel);
+            matrix.update_from_matrix(&transposed);
 
             // Check matrix indices
             for i in 0..cols {
@@ -1164,18 +1161,6 @@ mod matrix_borrow{
             dealloc(ptr as *mut u8, data_layout);
 
         }
-    }
-
-    #[test]
-    fn update_from_matrix_seq()
-    {
-        update_from_matrix(false);
-    }
-
-    #[test]
-    fn update_from_matrix_par()
-    {
-        update_from_matrix(true);
     }
 
 }

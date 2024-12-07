@@ -95,8 +95,10 @@ fn main() -> nix::Result<()>
     println!("Initializing matrices");
     let data = init_matrix_set(set_size, rows, cols);
 
+    println!("Precomputing transposes");
     let transposes = data.iter().map(|box_ref| box_ref.transpose_parallel_static(64)).collect::<Vec<_>>();
 
+    // COmpute the minimal payload size needed by this client.
     let payload_size: u64 = data.first().expect("The data array is empty?").payload_size() as u64;
 
     println!("Connecting to server");
@@ -123,8 +125,15 @@ fn main() -> nix::Result<()>
         // print!("{}", tmp.unwrap());
 
         client.shared_buffer.send(tmp);
+        if !client.shared_buffer.notify() {
+            println!("Error sending matrix notify");
+            return Err(nix::errno::Errno::EINVAL);
+        }
 
-        client.shared_buffer.wait_response();
+        if !client.shared_buffer.wait_response() {
+            return Err(nix::errno::Errno::ECONNREFUSED);
+        }
+
         let received = client.shared_buffer.receive();
 
         println!("Received!");
@@ -150,7 +159,7 @@ fn main() -> nix::Result<()>
     }
 
     println!("Inform the server that I am leaving!!");
-    client.shared_buffer.send(&Matrix::<f64>::new(0, 0));
+    client.shared_buffer.notify_action(-1);
 
     Ok(())
 }

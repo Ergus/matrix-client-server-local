@@ -1,13 +1,13 @@
 use std::os::{unix::io::AsRawFd, fd::RawFd};
 
-use crate::{Matrix, MatrixBorrow, SharedBuffer, stats};
+use crate::{stats, Matrix, MatrixBorrow, SharedBuffer};
 
 /// A server class to construct from server instances.
 ///
 /// This only stores the counter (to get tracks of the unique ids) and
 /// the file descriptor for the socket connection
 pub struct Server {
-    counter: u64,
+    counter: i8,
     fd: RawFd,
 }
 
@@ -39,8 +39,7 @@ impl Server {
 
         println!("Server listening on {}", Self::SOCKET_PATH);
 
-
-        Self { counter: 0,  fd}
+        Self { counter: 0,  fd }
     }
 
     /// Main thread server function
@@ -60,24 +59,19 @@ impl Server {
 
         loop {
             // Poll the ready flag
-            shared_buffer.wait_response();
+            if !shared_buffer.wait_response() {
+                println!("Client disconnected");
+                break;
+            }
+
             println!("Received matrix: {} from client: {}", counter, shared_buffer.id());
-            counter = counter + 1;
+            counter += 1;
 
             let mut __guard_total = stats::TimeGuard::new("Total");
 
             let mut matrix = { // Read Matrix from shared memory
                 let mut __guard = stats::TimeGuard::new("CopyIn");
-                let matrix = MatrixBorrow::<f64>::from_buffer(shared_buffer.payload);
-
-                // When we receive an empty matrix, then we break this thread and exit.
-                if matrix.datalen() == 0 {
-                    __guard_total.disable();
-                    __guard.disable();
-                    break;
-                }
-
-                matrix
+                MatrixBorrow::<f64>::from_buffer(shared_buffer.payload)
             };
 
 
@@ -91,11 +85,13 @@ impl Server {
             { // Write the result back into shared memory
                 let __guard = stats::TimeGuard::new("CopyOut");
                 match transpose {
-                    Some(mtranspose) => matrix.update_from_matrix(&mtranspose, true),
+                    Some(mtranspose) => { shared_buffer.send(&mtranspose) },
                     None => {}
                 }
-
-                shared_buffer.notify();
+                if !shared_buffer.notify() {
+                    println!("Matrix sent back, but client seems disconnected");
+                    break;
+                }
             }
         }
 
@@ -106,7 +102,7 @@ impl Server {
     /// place where the server `main' is most of the time
     ///
     ///This is not "elegant" to return a tuple, but it is simple enough
-    pub fn wait_client(&mut self) -> nix::Result<(RawFd, u64, u64)>
+    pub fn wait_client(&mut self) -> nix::Result<(RawFd, i8, u64)>
     {
         let mut buf = [0u8; 8];
 
@@ -116,7 +112,7 @@ impl Server {
         match nix::unistd::read(client_fd.as_raw_fd(), &mut buf) {
             Ok(n) if n > 0 => {
                 let payload_size = u64::from_be_bytes(buf);
-                self.counter = self.counter + 1;
+                self.counter += 1;
                 Ok((client_fd, self.counter, payload_size))
             }
             Ok(_) => {
@@ -150,7 +146,7 @@ impl Drop for Server {
 /// Only stores the id (receivef from the server) and the shared
 /// buffer (constructed from it)
 pub struct Client<'a> {
-    pub id: u64,
+    pub id: i8,
     pub shared_buffer: SharedBuffer<'a>,
 }
 
@@ -180,10 +176,13 @@ impl Client<'_> {
         let bytes = payload_size.to_be_bytes();
         nix::unistd::write(fd, &bytes).unwrap();
 
-        let mut buf = [0u8; 8];
+        let mut buf = [0u8; 1];
 
+        // I send and receive 8 bytes because it was the same size we
+        // sent and We can use the extra space for extra info in the
+        // future.
         let id = match nix::unistd::read(fd, &mut buf) {
-            Ok(n) if n == 8 => Ok(u64::from_be_bytes(buf)),
+            Ok(n) if n == 1 => Ok(i8::from_be_bytes(buf)),
             Ok(_) => Err(nix::errno::Errno::EIO), // Handle incomplete reads
             Err(err) => Err(err)
         }.unwrap();
@@ -191,11 +190,13 @@ impl Client<'_> {
         // Close the socket
         nix::unistd::close(fd).unwrap();
 
+        // TODO: Error handling here when receive a zero or negative value.
+        // Which means that the server could not accept out connection.
 
-        let shared_buffer = SharedBuffer::new(true, id, payload_size as usize)
+        let shared_buffer = SharedBuffer::new(id, 0, payload_size as usize)
             .expect("Client couldn't create shared buffer");
 
-        Self { id, shared_buffer }
+        Self { id: id as i8, shared_buffer }
     }
 
 }

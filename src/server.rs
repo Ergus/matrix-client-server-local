@@ -7,12 +7,12 @@ fn main() -> nix::Result<()> {
 
     loop {
         match server.wait_client() {
-            Ok((client_fd, id, payload_size)) => {
+            Ok((client_fd, rid, payload_size)) => {
 
                 std::thread::spawn(move || {
-                    match SharedBuffer::new(false, id, payload_size as usize) {
+                    match SharedBuffer::new(0, rid, payload_size as usize) {
                         Ok(mut shared_buffer) => {
-                            let _ = write(client_fd, &id.to_be_bytes());
+                            let _ = write(client_fd, &rid.to_be_bytes());
                             let _ = Server::server_thread(&mut shared_buffer);
                             println!("Client: {} finished and disconnected...", shared_buffer.id());
                         }

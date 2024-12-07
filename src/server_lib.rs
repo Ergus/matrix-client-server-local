@@ -71,7 +71,7 @@ impl Server {
 
             let mut matrix = { // Read Matrix from shared memory
                 let mut __guard = stats::TimeGuard::new("CopyIn");
-                MatrixBorrow::<f64>::from_buffer(shared_buffer.payload)
+                MatrixBorrow::<f64>::from_buffer(shared_buffer.payload())
             };
 
 

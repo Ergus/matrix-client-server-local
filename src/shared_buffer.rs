@@ -44,10 +44,8 @@ pub struct SharedBuffer<'a> {
     shm_fd: RawFd,
     ptr: *mut c_void,
     ready_flag: &'a AtomicI8,
-    pub payload: *mut c_void,
+    payload: *mut c_void,
 }
-
-
 
 impl SharedBuffer<'_> {
 
@@ -99,10 +97,10 @@ impl SharedBuffer<'_> {
         self.rid
     }
 
-    /// Get the number of 64 bits entries in the payload
-    pub fn n_elements(&self) -> usize
+    /// Get the payload start address
+    pub fn payload(&self) -> *mut c_void
     {
-        (self.shm_full_size - 8) / 8
+        self.payload
     }
 
     /// Change the flag value to notify the peer we are done.

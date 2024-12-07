@@ -1,16 +1,13 @@
-use nix::sys::mman::{mmap, munmap, shm_open, MapFlags, ProtFlags};
-use nix::unistd::close;
-use std::sync::atomic::{AtomicI8, Ordering};
-use nix::unistd::ftruncate;
-use nix::sys::stat::Mode;
-
 use std::ptr;
+use std::sync::atomic::{AtomicI8, Ordering};
 use std::os::unix::io::RawFd;
-
-use crate::matrix::Numeric64;
-use crate::{MatrixTemp, MatrixBorrow};
-use crate::matrix;
 use std::ffi::{c_void, CString};
+
+use nix::sys::mman::{mmap, munmap, shm_open, MapFlags, ProtFlags};
+use nix::sys::stat::Mode;
+use nix::unistd::{close,ftruncate};
+
+use crate::matrix;
 
 /// A class to perform matrix interchange between processes.
 ///
@@ -127,9 +124,9 @@ impl SharedBuffer<'_> {
     }
 
     /// Effectively write the matrix to the shared payload
-    pub fn send<T, S>(&self, matrix: &MatrixTemp<T, S>)
+    pub fn send<T, S>(&self, matrix: &matrix::MatrixTemp<T, S>)
       where
-        T: Numeric64,
+        T: matrix::Numeric64,
         S: matrix::SliceOrVec<T>,
         rand::distributions::Standard: rand::prelude::Distribution<T>,
     {
@@ -162,9 +159,9 @@ impl SharedBuffer<'_> {
     }
 
     /// Effectively read the matrix from the shared payload
-    pub fn receive(&mut self) -> MatrixBorrow::<f64>
+    pub fn receive(&mut self) -> matrix::MatrixBorrow::<f64>
     {
-        MatrixBorrow::<f64>::from_buffer(self.payload)
+        matrix::MatrixBorrow::<f64>::from_buffer(self.payload)
     }
 
 }

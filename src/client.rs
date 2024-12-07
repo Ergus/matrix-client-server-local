@@ -1,5 +1,6 @@
 use std::{env,mem};
 use std::sync::{Arc, Mutex};
+use std::io::{self, Write};
 
 use rand::Rng; // Import the Rng trait
 
@@ -29,8 +30,8 @@ fn parse_cl(args: &Vec<String>) -> (usize, usize, usize, usize)
     // Validate 
     match ret {
         (m, n, set_size, n_requests) => {
-            assert!(m >= 4 && m <= 14, "m is out of range");
-            assert!(n >= 4 && n <= 14, "m is out of range");
+            assert!(m >= 4 && m <= 16, "m is out of range");
+            assert!(n >= 4 && n <= 16, "m is out of range");
             assert!(set_size > 0, "Set size cannot be zero");
             assert!(n_requests > 0, "The number of requests cannot be zero");
         }
@@ -114,7 +115,7 @@ fn main() -> nix::Result<()>
 
 
     println!("Lets go!!");
-    for _ in 0..n_requests {
+    for i in 0..n_requests {
 
         let rand_i: usize = rng.gen_range(1..set_size);
 
@@ -124,11 +125,15 @@ fn main() -> nix::Result<()>
         // println!("Sent:");
         // print!("{}", tmp.unwrap());
 
+        print!("Sending matrix {}", i);
+        io::stdout().flush().unwrap();
+
         client.shared_buffer.send(tmp);
         if !client.shared_buffer.notify() {
             println!("Error sending matrix notify");
             return Err(nix::errno::Errno::EINVAL);
         }
+        println!(".. OK!");
 
         if !client.shared_buffer.wait_response() {
             return Err(nix::errno::Errno::ECONNREFUSED);
@@ -136,9 +141,12 @@ fn main() -> nix::Result<()>
 
         let received = client.shared_buffer.receive();
 
-        println!("Received!");
+        print!("Received transpose {}", i);
+        io::stdout().flush().unwrap();
 
-        if received != *transpose {
+        if received == *transpose {
+            println!(".. OK!");
+        } else {
             let difference = received.substract(&transpose);
 
             for i in 0..rows {

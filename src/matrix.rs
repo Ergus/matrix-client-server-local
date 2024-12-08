@@ -465,8 +465,7 @@ where
     /// when the host cores have different speed
     pub fn transpose_parallel_dynamic(&self, blocksize: usize) -> Matrix<T>
     {
-        let n_threads
-            = std::thread::available_parallelism().unwrap().get();
+        let n_threads = std::thread::available_parallelism().unwrap().get();
 
         let transposed = Matrix::<T>::new(self.cols, self.rows);
 
@@ -518,8 +517,7 @@ where
     {
         assert_eq!(self.cols, self.rows, "Inplace transpose is only for squared matrices.");
 
-        let n_threads
-            = std::thread::available_parallelism().unwrap().get();
+        let n_threads = std::thread::available_parallelism().unwrap().get();
 
         let blocks_cols = self.cols / blocksize;
 

@@ -7,6 +7,8 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 
+use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+
 macro_rules! implement_numeric64 {
     ($($t:ty),*) => {
         $(
@@ -262,6 +264,14 @@ where
         for row in row_block..row_end {
 
             unsafe {
+                if row + 1 < row_end {
+                    let next_start = src.add((row + 1) * self.cols + col_block);
+
+                     for offset in (0..block.cols).step_by(8) {
+                         _mm_prefetch(next_start.add(offset) as *const i8, _MM_HINT_T0);
+                     }
+                }
+
                 // Efficient vectorized copy (~memcpy)
                 ptr::copy_nonoverlapping(
                     src.add(row * self.cols + col_block),
@@ -291,23 +301,32 @@ where
 
         let copysize: usize = col_end - col_block;
 
-        let src: *mut T = self.data.write().unwrap().as_ptr() as *mut T;
-        let dst: *const T = block.data.read().unwrap().as_ptr();
+        let src_blk: *const T = block.data.read().unwrap().as_ptr();
+        let dst_mat: *mut T = self.data.write().unwrap().as_ptr() as *mut T;
 
-        let mut startdst: usize = 0;
+        let mut startsrc: usize = 0;
 
         // Copy from matrix to blocks
         for row in row_block..row_end {
 
             unsafe {
+
+                if startsrc + 1 < block.rows {
+                    let next_start = src_blk.add(startsrc + 1);
+
+                     for offset in (0..block.cols).step_by(8) {
+                         _mm_prefetch(next_start.add(offset) as *const i8, _MM_HINT_T0);
+                     }
+                }
+
                 // Efficient vectorized copy (~memcpy)
                 ptr::copy_nonoverlapping(
-                    dst.add(startdst),
-                    src.add(row * self.cols + col_block),
+                    src_blk.add(startsrc),
+                    dst_mat.add(row * self.cols + col_block),
                     copysize);
             }
 
-            startdst += block.cols();
+            startsrc += block.cols();
         }
     }
 

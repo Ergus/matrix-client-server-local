@@ -1,43 +1,7 @@
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::{Arc, Mutex, MutexGuard, Condvar};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread;
 
 use std::collections::VecDeque;
-
-#[cfg(target_arch = "x86")]
-use core::arch::x86::_mm_pause;
-
-#[cfg(target_arch = "x86_64")]
-use core::arch::x86_64::_mm_pause;
-
-#[cfg(target_arch = "arm")]
-use core::arch::arm::__yield;
-
-#[cfg(target_arch = "aarch64")]
-use core::arch::aarch64::__yield;
-
-// General spin_wait function
-fn spin_wait() {
-    unsafe {
-        // Use platform-specific pause/yield instruction
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        _mm_pause();
-
-        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-        __yield();
-    }
-
-    // Fall back to std::thread::yield_now() if architecture is unsupported
-    #[cfg(not(any(
-        target_arch = "x86",
-        target_arch = "x86_64",
-        target_arch = "arm",
-        target_arch = "aarch64"
-    )))]
-    {
-        std::thread::yield_now();
-    }
-}
 
 struct Task {
     id: usize,
@@ -68,7 +32,7 @@ impl Task {
 
 struct Worker {
     id: usize,
-    thread: Option<thread::JoinHandle<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Worker {
@@ -78,28 +42,44 @@ impl Worker {
     ) -> Self {
         println!("Creating Worker: {}", id);
 
-        let thread = thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
 
             println!("Worker {} Running", id);
-            while controler.active.load(Ordering::Relaxed) {
+            'outter: loop {
 
                 loop {
                     // The task needs to be taken independently of the
                     // match, because when inlined in the match it
                     // looks like the match holds the lock.
-                    let task = controler.queue.lock().unwrap().pop_front();
+                    let task = {
+                        let mut lock = controler.queue.lock().unwrap();
+
+                        // I use a condition variable here to avoid
+                        // wasting resources on active waiting
+                        // (pooling)
+
+                        // The thread will be here in the condition
+                        // variable until someone notifies that there
+                        // is some work to do or sets active to false.
+                        while lock.is_empty()
+                            && controler.active.load(Ordering::Relaxed) {
+                            lock = controler.cv.wait(lock).unwrap();
+                        };
+
+                        // We can pop_front even in empty queues.
+                        // When the queue is empty we are here because
+                        // active was set to false and we want to
+                        // exit.  However, We don't do that check here
+                        // to not-hold the lock for longer.
+                        lock.pop_front()
+                    };
 
                     match task {
                         Some(task) => {
                             println!(" -> Worker {id} got task {}", task.id);
                             task.execute();
                         },
-                        None => {
-                            // We break here because the queue is empty,
-                            // So we can check the active condition.
-                            spin_wait();
-                            break;
-                        }
+                        None => {break 'outter} // We are exiting
                     }
                 }
             }
@@ -113,6 +93,7 @@ impl Worker {
 struct ThreadPoolControlers {
     queue: Mutex<VecDeque<Task>>,
     active: AtomicBool,
+    cv: Condvar,
 }
 
 pub struct ThreadPool {
@@ -129,7 +110,9 @@ impl ThreadPool {
         let controler = Arc::new(
             ThreadPoolControlers {
                 queue: Mutex::new(VecDeque::<Task>::new()),
-                active: AtomicBool::new(true)}
+                active: AtomicBool::new(true),
+                cv: Condvar::new()
+            }
         );
 
         let workers = (0..size)
@@ -142,7 +125,14 @@ impl ThreadPool {
     /// Execute a task by sending it to the thread pool.
     pub fn submit(&self, job: Box<dyn FnOnce() + Send>)
     {
-        self.controler.queue.lock().unwrap().push_back(Task::new(job));
+        let mut guard = self.controler.queue.lock().unwrap();
+
+        guard.push_back(Task::new(job));
+        if guard.len() == 1 {
+            // threads may be sleeping
+            self.controler.cv.notify_all();
+        }
+
     }
 
     /// Execute a task by sending it to the thread pool.
@@ -170,17 +160,24 @@ impl Drop for ThreadPool {
 
         self.controler.active.store(false, Ordering::Relaxed);
 
-        for worker in &mut self.workers {
-            if let Some(thread) = worker.thread.take() {
-                thread.join().unwrap();
-            }
-        }
+        // This notify is to stop all inactive threads that may be
+        // waiting in the condvar.
+        // The wait condition include both conditions:
+        // !queue_empty + active == true
+        self.controler.cv.notify_all();
+
+        self.workers
+            .iter_mut()
+            .for_each(
+                |worker| worker.thread.take().unwrap().join().unwrap()
+            );
     }
 }
 
 struct PoolScopeControls {
     num_pending_tasks: AtomicUsize,
-    shutdown_signal: (Mutex<bool>, Condvar),
+    mutex: Mutex<()>,
+    cv: Condvar,
 }
 
 pub struct PoolScopeData<'scope> {
@@ -197,7 +194,8 @@ impl<'scope> PoolScopeData<'scope> {
             controls: Arc::new(
                 PoolScopeControls {
                     num_pending_tasks: AtomicUsize::new(0),
-                    shutdown_signal: (Mutex::new(false), Condvar::new()),
+                    mutex: Mutex::new(()),
+                    cv: Condvar::new()
                 }
             ),
         }
@@ -216,9 +214,8 @@ impl<'scope> PoolScopeData<'scope> {
             f();
 
             if controls.num_pending_tasks.fetch_sub(1, Ordering::SeqCst) == 1 {
-                let mut shutdown_complete = controls.shutdown_signal.0.lock().unwrap();
-                *shutdown_complete = true;
-                controls.shutdown_signal.1.notify_one();
+                let _guard = controls.mutex.lock().unwrap();
+                controls.cv.notify_one();
             }
 
         });
@@ -231,9 +228,9 @@ impl<'a> Drop for PoolScopeData<'a> {
 
     fn drop(&mut self) {
 
-        let mut shutdown_complete = self.controls.shutdown_signal.0.lock().unwrap();
+        let guard = self.controls.mutex.lock().unwrap();
         while self.controls.num_pending_tasks.load(Ordering::SeqCst) > 0 {
-            shutdown_complete = self.controls.shutdown_signal.1.wait(shutdown_complete).unwrap();
+            self.controls.cv.wait(guard).unwrap();
         }
     }
 

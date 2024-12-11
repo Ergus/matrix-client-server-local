@@ -4,7 +4,67 @@ use std::thread;
 
 use std::collections::VecDeque;
 
-type Job = Box<dyn FnOnce() + Send>;
+#[cfg(target_arch = "x86")]
+use core::arch::x86::_mm_pause;
+
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::_mm_pause;
+
+#[cfg(target_arch = "arm")]
+use core::arch::arm::__yield;
+
+#[cfg(target_arch = "aarch64")]
+use core::arch::aarch64::__yield;
+
+// General spin_wait function
+fn spin_wait() {
+    unsafe {
+        // Use platform-specific pause/yield instruction
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        _mm_pause();
+
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        __yield();
+    }
+
+    // Fall back to std::thread::yield_now() if architecture is unsupported
+    #[cfg(not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64"
+    )))]
+    {
+        std::thread::yield_now();
+    }
+}
+
+struct Task {
+    id: usize,
+    job: Box<dyn FnOnce() + Send>,
+}
+
+impl Task {
+    // Static-like counter specific to UniqueStruct.
+    fn counter() -> &'static AtomicUsize
+    {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0); // Static counter within the `impl`.
+        &COUNTER
+    }
+
+    // Constructor for creating a new instance with a unique ID.
+    fn new(job: Box<dyn FnOnce() + Send>) -> Self
+    {
+        let id = Self::counter().fetch_add(1, Ordering::Relaxed); // Increment counter atomically.
+        Self { id, job }
+    }
+
+    fn execute(self)
+    {
+        (self.job)();
+    }
+}
+
 
 struct Worker {
     id: usize,
@@ -24,15 +84,20 @@ impl Worker {
             while controler.active.load(Ordering::Relaxed) {
 
                 loop {
-                    let job = controler.queue.lock().unwrap().pop_front();
+                    // The task needs to be taken independently of the
+                    // match, because when inlined in the match it
+                    // looks like the match holds the lock.
+                    let task = controler.queue.lock().unwrap().pop_front();
 
-                    match job {
-                        Some(job) => {
-                            println!(" -> Worker {id} got a job; executing.");
-                            job();
+                    match task {
+                        Some(task) => {
+                            println!(" -> Worker {id} got task {}", task.id);
+                            task.execute();
                         },
                         None => {
-                            std::thread::yield_now();
+                            // We break here because the queue is empty,
+                            // So we can check the active condition.
+                            spin_wait();
                             break;
                         }
                     }
@@ -46,7 +111,7 @@ impl Worker {
 }
 
 struct ThreadPoolControlers {
-    queue: Mutex<VecDeque<Job>>,
+    queue: Mutex<VecDeque<Task>>,
     active: AtomicBool,
 }
 
@@ -63,7 +128,7 @@ impl ThreadPool {
 
         let controler = Arc::new(
             ThreadPoolControlers {
-                queue: Mutex::new(VecDeque::<Job>::new()),
+                queue: Mutex::new(VecDeque::<Task>::new()),
                 active: AtomicBool::new(true)}
         );
 
@@ -75,9 +140,9 @@ impl ThreadPool {
     }
 
     /// Execute a task by sending it to the thread pool.
-    pub fn submit(&self, job: Job)
+    pub fn submit(&self, job: Box<dyn FnOnce() + Send>)
     {
-        self.controler.queue.lock().unwrap().push_back(job);
+        self.controler.queue.lock().unwrap().push_back(Task::new(job));
     }
 
     /// Execute a task by sending it to the thread pool.
@@ -110,7 +175,6 @@ impl Drop for ThreadPool {
                 thread.join().unwrap();
             }
         }
-
     }
 }
 
@@ -223,10 +287,8 @@ mod matrix_borrow {
                     std::thread::sleep(Duration::from_millis(500));
                 });
             }
-        }
-        );
+        });
 
     }
-
 }
 

@@ -304,9 +304,8 @@ public:
 
 	std::unique_ptr<Matrix> transpose() const
 	{
-		
 		//return std::make_unique<Matrix>(transpose_parallel_dynamic(Matrix_t<double>::BLOCKDIM));
-		return std::make_unique<Matrix>(transpose_big(Matrix_t<double>::BLOCKDIM));
+		return std::make_unique<Matrix>(transpose_parallel_dynamic(Matrix_t<double>::BLOCKDIM));
 	}
 };
 

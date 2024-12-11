@@ -1,6 +1,6 @@
 use std::os::{unix::io::AsRawFd, fd::RawFd};
 
-use crate::{stats, Matrix, MatrixBorrow, SharedBuffer};
+use crate::{stats, bridge, Matrix, MatrixBorrow, SharedBuffer};
 
 /// A server class to construct from server instances.
 ///
@@ -83,7 +83,7 @@ impl Server {
             };
 
             let _ctranspose = unsafe {
-                let cmatrix = bridge::from_buffer(shared_buffer.payload as *mut u8);
+                let cmatrix = bridge::from_buffer(shared_buffer.payload() as *mut u8);
 
                 let __guard = stats::TimeGuard::new("CTranspose");
                 cmatrix.transpose()

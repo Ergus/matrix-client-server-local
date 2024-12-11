@@ -11,3 +11,4 @@ pub use shared_buffer::SharedBuffer;
 mod stats;
 mod bridge;
 
+mod thread_pool;

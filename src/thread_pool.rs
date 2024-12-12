@@ -140,6 +140,12 @@ impl ThreadPool {
         Self {workers, controler}
     }
 
+    pub fn new_default() -> Self
+    {
+        let n_threads = std::thread::available_parallelism().unwrap().get();
+        Self::new(n_threads)
+    }
+
     /// Execute a task by sending it to the thread pool.
     pub fn submit(&self, job: Box<dyn FnOnce() + Send>)
     {

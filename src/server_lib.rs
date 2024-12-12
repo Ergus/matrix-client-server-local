@@ -1,4 +1,6 @@
-use std::os::{unix::io::AsRawFd, fd::RawFd};
+use std::os::{fd::{AsFd, FromRawFd, IntoRawFd, OwnedFd, RawFd}, unix::io::AsRawFd};
+
+use nix::sys::socket::Backlog;
 
 use crate::{stats, bridge, Matrix, MatrixBorrow, SharedBuffer};
 
@@ -8,7 +10,7 @@ use crate::{stats, bridge, Matrix, MatrixBorrow, SharedBuffer};
 /// the file descriptor for the socket connection
 pub struct Server {
     counter: i8,
-    fd: RawFd,
+    fd: OwnedFd,
 }
 
 impl Server {
@@ -23,7 +25,7 @@ impl Server {
         }
 
         // Create the Unix socket
-        let fd = nix::sys::socket::socket(
+        let fd: OwnedFd = nix::sys::socket::socket(
             nix::sys::socket::AddressFamily::Unix,
             nix::sys::socket::SockType::Stream,
             nix::sys::socket::SockFlag::empty(),
@@ -32,10 +34,10 @@ impl Server {
 
         // Bind the socket to the file system path
         let sockaddr = nix::sys::socket::UnixAddr::new(Self::SOCKET_PATH).unwrap();
-        nix::sys::socket::bind(fd, &sockaddr).unwrap();
+        nix::sys::socket::bind(fd.as_raw_fd(), &sockaddr).unwrap();
 
         // Start listening for incoming connections
-        nix::sys::socket::listen(fd, 10).unwrap();
+        nix::sys::socket::listen(&fd, Backlog::new(10).unwrap()).unwrap();
 
         println!("Server listening on {}", Self::SOCKET_PATH);
 
@@ -110,18 +112,20 @@ impl Server {
     /// place where the server `main' is most of the time
     ///
     ///This is not "elegant" to return a tuple, but it is simple enough
-    pub fn wait_client(&mut self) -> nix::Result<(RawFd, i8, u64)>
+    pub fn wait_client(&mut self) -> nix::Result<(OwnedFd, i8, u64)>
     {
         let mut buf = [0u8; 8];
 
-        let client_fd = nix::sys::socket::accept(self.fd)?;
+        let client_fd = nix::sys::socket::accept(self.fd.as_raw_fd()).unwrap();
 
         // Read the number from the client
-        match nix::unistd::read(client_fd.as_raw_fd(), &mut buf) {
+        match nix::unistd::read(client_fd, &mut buf) {
             Ok(n) if n > 0 => {
                 let payload_size = u64::from_be_bytes(buf);
                 self.counter += 1;
-                Ok((client_fd, self.counter, payload_size))
+
+                let owned_client_fd = unsafe { OwnedFd::from_raw_fd(client_fd) };
+                Ok((owned_client_fd, self.counter, payload_size))
             }
             Ok(_) => {
                 eprintln!("Client disconnected");
@@ -138,7 +142,7 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         // Close the listening socket
-        if let Err(err) = nix::unistd::close(self.fd) {
+        if let Err(err) = nix::unistd::close(self.fd.as_raw_fd()) {
             eprintln!("Failed to close listening socket: {}", err);
         }
 
@@ -178,25 +182,25 @@ impl Client<'_> {
         let sockaddr = nix::sys::socket::UnixAddr::new(Server::SOCKET_PATH).unwrap();
 
         // Connect to the server
-        nix::sys::socket::connect(fd, &sockaddr).unwrap();
+        nix::sys::socket::connect(fd.as_raw_fd(), &sockaddr).unwrap();
 
         // Send a number
         let bytes = payload_size.to_be_bytes();
-        nix::unistd::write(fd, &bytes).unwrap();
+        nix::unistd::write(&fd, &bytes).unwrap();
 
         let mut buf = [0u8; 1];
 
         // I send and receive 8 bytes because it was the same size we
         // sent and We can use the extra space for extra info in the
         // future.
-        let id = match nix::unistd::read(fd, &mut buf) {
+        let id = match nix::unistd::read(fd.as_raw_fd(), &mut buf) {
             Ok(n) if n == 1 => Ok(i8::from_be_bytes(buf)),
             Ok(_) => Err(nix::errno::Errno::EIO), // Handle incomplete reads
             Err(err) => Err(err)
         }.unwrap();
 
         // Close the socket
-        nix::unistd::close(fd).unwrap();
+        nix::unistd::close(fd.as_raw_fd()).unwrap();
 
         // TODO: Error handling here when receive a zero or negative value.
         // Which means that the server could not accept out connection.

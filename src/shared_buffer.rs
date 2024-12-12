@@ -1,3 +1,4 @@
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::ptr;
 use std::sync::atomic::{AtomicI8, Ordering};
 use std::os::unix::io::RawFd;
@@ -32,14 +33,14 @@ use crate::matrix;
 /// 5. When the server's thread finds that the flag is on true. It starts the
 ///    read process and writes back the information in the same place when done.
 /// 6. The sets the flag to false again
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SharedBuffer<'a> {
     shm_name: String,
     id: i8,
     rid: i8,
     shm_full_size: usize,
-    shm_fd: RawFd,
-    ptr: *mut c_void,
+    shm_fd: OwnedFd,
+    ptr: ptr::NonNull<c_void>,
     ready_flag: &'a AtomicI8,
     payload: *mut c_void,
 }
@@ -55,12 +56,12 @@ impl SharedBuffer<'_> {
         let shm_name: String = format!("/rust_ipc_shm_{}", std::cmp::max(id, rid));
         let shm_full_size: usize = align_of::<u128>()  + payload_size;
 
-        let shm_fd: RawFd;
+        let shm_fd: OwnedFd;
 
         if id == 0 {
             shm_fd = shm_open(shm_name.as_str(), nix::fcntl::OFlag::O_CREAT | nix::fcntl::OFlag::O_RDWR, Mode::S_IRWXU)
                 .expect("Server failed to create shared memory");
-            ftruncate(shm_fd, shm_full_size as i64).unwrap();
+            ftruncate(&shm_fd, shm_full_size as i64).unwrap();
         } else {
             shm_fd = shm_open(shm_name.as_str(), nix::fcntl::OFlag::O_RDWR, nix::sys::stat::Mode::empty())
                 .expect("Client failed to open shared memory");
@@ -68,17 +69,17 @@ impl SharedBuffer<'_> {
 
         let ptr = unsafe {
             mmap(
-                ptr::null_mut(),
-                shm_full_size,
+                None,
+                std::num::NonZeroUsize::new(shm_full_size).unwrap(),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_SHARED,
-                shm_fd,
+                &shm_fd,
                 0,
             ).expect("Failed to map shared memory")
-        } as *mut c_void;
+        };
 
-        let ready_flag: &AtomicI8 = unsafe { &*(ptr as *mut AtomicI8) };
-        let payload: *mut c_void = unsafe { ptr.byte_add(align_of::<u128>()) };
+        let ready_flag: &AtomicI8 = unsafe { &*(ptr.as_ptr() as *mut AtomicI8) };
+        let payload: *mut c_void = unsafe { ptr.byte_add(align_of::<u128>()).as_ptr() };
 
         // Server initializes the flag on creation.
         if id == 0 {
@@ -171,7 +172,7 @@ impl Drop for SharedBuffer<'_> {
         unsafe {
             munmap(self.ptr, self.shm_full_size).unwrap();
         }
-        close(self.shm_fd).unwrap();
+        close(self.shm_fd.as_raw_fd()).unwrap();
 
         if self.id == 0 {
             shm_unlink(self.shm_name.as_str()).expect("Failed to unlink shared memory");

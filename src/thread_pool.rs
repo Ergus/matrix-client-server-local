@@ -87,6 +87,9 @@ impl Worker {
                             println!(" -> Worker {id} got task {}", task.id);
                             task.execute();
 
+                            // When all the tasks are executed in the
+                            // threadpool we notify in case there is a
+                            // taskwait blocking anything.
                             if controler.running.fetch_sub(1, Ordering::Relaxed) == 1 {
                                 let _lock = controler.queue.lock().unwrap();
                                 controler.cv.notify_all();
@@ -162,13 +165,13 @@ impl ThreadPool {
     where
       F: FnOnce(&PoolScopeData<'scope>),
     {
-        // We put the `ScopeData` into an `Arc` so that other threads can finish their
-        // `decrement_num_running_threads` even after this function returns.
         let scope = PoolScopeData::new(&self);
 
         fout(&scope);
 
-        drop(scope);
+        // The scope destructor has an implicit taskwait for the scope
+        // tasks.
+        scope.taskwait();
     }
 
     pub fn taskwait(&self)
@@ -181,8 +184,8 @@ impl ThreadPool {
 }
 
 impl Drop for ThreadPool {
-    fn drop(&mut self) {
 
+    fn drop(&mut self) {
         self.controler.active.store(false, Ordering::Relaxed);
 
         // This notify is to stop all inactive threads that may be
@@ -215,8 +218,8 @@ pub struct PoolScopeData<'scope> {
 
 impl<'scope> PoolScopeData<'scope> {
 
-    pub fn new(pool: &'scope ThreadPool) -> Self {
-
+    pub fn new(pool: &'scope ThreadPool) -> Self
+    {
         Self {
             thread_pool: &pool,
             controls: Arc::new(
@@ -229,7 +232,6 @@ impl<'scope> PoolScopeData<'scope> {
         }
     }
 
-
     pub fn spawn<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'scope + 'static,
@@ -241,6 +243,9 @@ impl<'scope> PoolScopeData<'scope> {
 
             f();
 
+            // Notify for counter in scope finalization.  The last
+            // task in the scope will notify in case there is a
+            // taskwait blocking the scope code.
             if controls.num_pending_tasks.fetch_sub(1, Ordering::SeqCst) == 1 {
                 let _guard = controls.scope_mutex.lock().unwrap();
                 controls.cv.notify_one();
@@ -250,19 +255,22 @@ impl<'scope> PoolScopeData<'scope> {
 
         self.thread_pool.submit(job);
     }
-}
 
-impl<'a> Drop for PoolScopeData<'a> {
-
-    fn drop(&mut self) {
-
+    pub fn taskwait(&self)
+    {
         let mut guard = self.controls.scope_mutex.lock().unwrap();
 
         while self.controls.num_pending_tasks.load(Ordering::SeqCst) > 0 {
             guard = self.controls.cv.wait(guard).unwrap();
         }
     }
+}
 
+impl<'a> Drop for PoolScopeData<'a>
+{
+    fn drop(&mut self) {
+        assert_eq!(self.controls.num_pending_tasks.load(Ordering::SeqCst), 0);
+    }
 }
 
 
@@ -299,11 +307,11 @@ mod matrix_borrow {
         println!("=== Taskwait!!!===");
 
         for i in 9..18 {
+            println!("Submitting {}!", i);
             pool.execute(move || {
                 println!("\tAfter {} is running.", i);
             });
         }
-
     }
 
     #[test]
@@ -322,6 +330,7 @@ mod matrix_borrow {
         println!("=== Taskwait!!!===");
 
         for i in 9..18 {
+            println!("Submitting {}!", i);
             pool.execute(move || {
                 println!("\tAfter {} is running.", i);
                 std::thread::sleep(Duration::from_millis(500));
@@ -358,6 +367,33 @@ mod matrix_borrow {
                     std::thread::sleep(Duration::from_millis(500));
                 });
             }
+        });
+    }
+
+    #[test]
+    fn pool_scope_taskwait()
+    {
+        let pool = ThreadPool::new(4);
+
+        pool.scope(move |s| {
+            for i in 0..8 {
+                s.spawn(move || {
+                    println!("\tBefore {} is running.", i);
+                    std::thread::sleep(Duration::from_millis(500));
+                });
+            }
+
+            s.taskwait();
+            println!("=== Taskwait!!!===");
+
+            for i in 9..16 {
+                println!("Submitting {}!", i);
+                s.spawn(move || {
+                    println!("\tAfter {} is running.", i);
+                    std::thread::sleep(Duration::from_millis(500));
+                });
+            }
+
         });
     }
 

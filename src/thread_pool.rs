@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard, Condvar};
+use std::sync::{Arc, Mutex, Condvar};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use std::collections::VecDeque;
@@ -61,10 +61,18 @@ impl Worker {
                         // The thread will be here in the condition
                         // variable until someone notifies that there
                         // is some work to do or sets active to false.
-                        while lock.is_empty()
-                            && controler.active.load(Ordering::Relaxed) {
+                        while lock.is_empty() && controler.active.load(Ordering::Relaxed) {
                             lock = controler.cv.wait(lock).unwrap();
                         };
+
+                        if lock.is_empty() {
+                            break 'outter
+                        }
+
+                        // Update the atomic, this trick is to avoid
+                        // taking the lock on every task finalization
+                        // to notify taskwait.
+                        controler.running.fetch_add(1, Ordering::Relaxed);
 
                         // We can pop_front even in empty queues.
                         // When the queue is empty we are here because
@@ -78,6 +86,11 @@ impl Worker {
                         Some(task) => {
                             println!(" -> Worker {id} got task {}", task.id);
                             task.execute();
+
+                            if controler.running.fetch_sub(1, Ordering::Relaxed) == 1 {
+                                let _lock = controler.queue.lock().unwrap();
+                                controler.cv.notify_all();
+                            }
                         },
                         None => {break 'outter} // We are exiting
                     }
@@ -92,6 +105,7 @@ impl Worker {
 
 struct ThreadPoolControlers {
     queue: Mutex<VecDeque<Task>>,
+    running: AtomicUsize,
     active: AtomicBool,
     cv: Condvar,
 }
@@ -110,6 +124,7 @@ impl ThreadPool {
         let controler = Arc::new(
             ThreadPoolControlers {
                 queue: Mutex::new(VecDeque::<Task>::new()),
+                running: AtomicUsize::new(0),
                 active: AtomicBool::new(true),
                 cv: Condvar::new()
             }
@@ -126,10 +141,10 @@ impl ThreadPool {
     pub fn submit(&self, job: Box<dyn FnOnce() + Send>)
     {
         let mut guard = self.controler.queue.lock().unwrap();
-
         guard.push_back(Task::new(job));
+
         if guard.len() == 1 {
-            // threads may be sleeping
+            // wake up threads that may be sleeping
             self.controler.cv.notify_all();
         }
 
@@ -152,6 +167,16 @@ impl ThreadPool {
         let scope = PoolScopeData::new(&self);
 
         fout(&scope);
+
+        drop(scope);
+    }
+
+    pub fn taskwait(&self)
+    {
+        let mut guard = self.controler.queue.lock().unwrap();
+        while guard.len() > 0 {
+            guard = self.controler.cv.wait(guard).unwrap();
+        }
     }
 }
 
@@ -166,6 +191,9 @@ impl Drop for ThreadPool {
         // !queue_empty + active == true
         self.controler.cv.notify_all();
 
+        // Now wait all pending tasks
+        self.taskwait();
+
         self.workers
             .iter_mut()
             .for_each(
@@ -176,7 +204,7 @@ impl Drop for ThreadPool {
 
 struct PoolScopeControls {
     num_pending_tasks: AtomicUsize,
-    mutex: Mutex<()>,
+    scope_mutex: Mutex<()>,
     cv: Condvar,
 }
 
@@ -194,7 +222,7 @@ impl<'scope> PoolScopeData<'scope> {
             controls: Arc::new(
                 PoolScopeControls {
                     num_pending_tasks: AtomicUsize::new(0),
-                    mutex: Mutex::new(()),
+                    scope_mutex: Mutex::new(()),
                     cv: Condvar::new()
                 }
             ),
@@ -214,7 +242,7 @@ impl<'scope> PoolScopeData<'scope> {
             f();
 
             if controls.num_pending_tasks.fetch_sub(1, Ordering::SeqCst) == 1 {
-                let _guard = controls.mutex.lock().unwrap();
+                let _guard = controls.scope_mutex.lock().unwrap();
                 controls.cv.notify_one();
             }
 
@@ -228,9 +256,10 @@ impl<'a> Drop for PoolScopeData<'a> {
 
     fn drop(&mut self) {
 
-        let guard = self.controls.mutex.lock().unwrap();
+        let mut guard = self.controls.scope_mutex.lock().unwrap();
+
         while self.controls.num_pending_tasks.load(Ordering::SeqCst) > 0 {
-            self.controls.cv.wait(guard).unwrap();
+            guard = self.controls.cv.wait(guard).unwrap();
         }
     }
 
@@ -250,27 +279,72 @@ mod matrix_borrow {
 
         for i in 0..8 {
             pool.execute(move || {
-                println!("Task {} is running.", i);
+                println!("\tTask {} is running.", i);
             });
         }
     }
 
     #[test]
-    fn pool_scope()
+    fn pool_taskwait_fast()
+    {
+        let pool = ThreadPool::new(4);
+
+        for i in 0..8 {
+            pool.execute(move || {
+                println!("\tBefore {} is running.", i);
+            });
+        }
+
+        pool.taskwait();
+        println!("=== Taskwait!!!===");
+
+        for i in 9..18 {
+            pool.execute(move || {
+                println!("\tAfter {} is running.", i);
+            });
+        }
+
+    }
+
+    #[test]
+    fn pool_taskwait_timer()
+    {
+        let pool = ThreadPool::new(4);
+
+        for i in 0..8 {
+            pool.execute(move || {
+                println!("\tBefore {} is running.", i);
+                std::thread::sleep(Duration::from_millis(500));
+            });
+        }
+
+        pool.taskwait();
+        println!("=== Taskwait!!!===");
+
+        for i in 9..18 {
+            pool.execute(move || {
+                println!("\tAfter {} is running.", i);
+                std::thread::sleep(Duration::from_millis(500));
+            });
+        }
+
+    }
+
+    #[test]
+    fn pool_scope_fast()
     {
         let pool = ThreadPool::new(4);
 
         pool.scope(move |s| {
             for i in 0..8 {
                 s.spawn(move || {
-                    println!("Task {} is running.", i);
+                    println!("\tTask {} is running.", i);
                 });
             }
         }
         );
 
     }
-
 
     #[test]
     fn pool_scope_timer()
@@ -280,12 +354,12 @@ mod matrix_borrow {
         pool.scope(move |s| {
             for i in 0..16 {
                 s.spawn(move || {
-                    println!("Task {} is running.", i);
+                    println!("\tTask {} is running.", i);
                     std::thread::sleep(Duration::from_millis(500));
                 });
             }
         });
-
     }
+
 }
 

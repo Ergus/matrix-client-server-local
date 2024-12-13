@@ -242,29 +242,6 @@ pub struct ThreadPool {
     controler: Arc<ThreadPoolControlers>,
 }
 
-fn get_cores() -> Vec<usize>
-{
-    let pid = nix::unistd::Pid::this();
-    let cpu_set: nix::sched::CpuSet = nix::sched::sched_getaffinity(pid).unwrap();
-
-    (0..nix::sched::CpuSet::count())
-        .filter_map(|i| {
-            match cpu_set.is_set(i) {
-                Ok(true) => Some(i),
-                _ => None, // Skip CPUs that are not set or errors
-            }
-        }).collect()
-}
-
-#[cfg(test)]
-#[test]
-fn test_get_cores()
-{
-    let cores = get_cores();
-    println!("Cores: {:?}", cores);
-}
-
-
 impl ThreadPool {
     /// Creates a new `ThreadPool` with a fixed number of threads.
     ///
@@ -292,11 +269,25 @@ impl ThreadPool {
         Self { workers, controler }
     }
 
+    fn get_cores() -> Vec<usize>
+    {
+        let pid = nix::unistd::Pid::this();
+        let cpu_set: nix::sched::CpuSet = nix::sched::sched_getaffinity(pid).unwrap();
+
+        (0..nix::sched::CpuSet::count())
+            .filter_map(|i| {
+                match cpu_set.is_set(i) {
+                    Ok(true) => Some(i),
+                    _ => None, // Skip CPUs that are not set or errors
+                }
+            }).collect()
+    }
+
     /// Creates a new `ThreadPool` with the default number of threads
     /// based on system parallelism.
     pub fn new_with_affinity() -> Self {
 
-        let cores = get_cores();
+        let cores = Self::get_cores();
 
         assert!(cores.len() > 0);
 
@@ -365,6 +356,12 @@ impl ThreadPool {
             guard = self.controler.cv.wait(guard).unwrap();
         }
     }
+
+    pub fn len(&self) -> usize
+    {
+        self.workers.len()
+    }
+
 }
 
 impl Drop for ThreadPool {
@@ -458,6 +455,15 @@ mod thread_pool {
 
     use super::*;
     use std::time::Duration;
+
+    #[cfg(test)]
+    #[test]
+    fn test_get_cores()
+    {
+        let cores = ThreadPool::get_cores();
+        println!("Cores: {:?}", cores);
+    }
+
 
     #[test]
     fn execute()

@@ -1,7 +1,6 @@
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::ptr;
 use std::sync::atomic::{AtomicI8, Ordering};
-use std::os::unix::io::RawFd;
 use std::ffi::c_void;
 
 use nix::sys::mman::{mmap, munmap, shm_open, shm_unlink, MapFlags, ProtFlags};

@@ -16,11 +16,10 @@
 
 #![allow(dead_code)]
 
+
 use std::sync::{Arc, Mutex, Condvar};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
 use std::collections::VecDeque;
-
 
 /// Represents a task with a unique identifier and a job (a closure) that can be executed.
 ///
@@ -77,99 +76,138 @@ impl Task {
 
 /// Represents a worker thread in a thread pool, responsible for executing tasks.
 ///
-/// The `Worker` struct encapsulates a worker thread that runs tasks from a shared task queue.
-/// Each worker operates within a thread pool and communicates with a controller to handle task execution and synchronization.
+/// The `Worker` struct encapsulates a worker thread that runs tasks
+/// from a shared task queue.
+/// Each worker operates within a thread pool and communicates with a controller
+/// to handle task execution and synchronization.
 ///
 /// # Fields
 /// - `id`: A unique identifier for the worker.
-/// - `thread`: An `Option` holding the `JoinHandle` for the worker's thread, allowing it to be joined later when the thread completes.
+/// - `thread`: An `Option` holding the `JoinHandle` for the worker's thread,
+///    allowing it to be joined later when the thread completes.
 ///
 /// # Methods
-/// - `new(id: usize, controler: Arc<ThreadPoolControlers>) -> Self`: Creates a new `Worker` with the given ID and control structure, starting a new thread that will process tasks.
+/// - `new(id: usize, controler: Arc<ThreadPoolControlers>) -> Self`: Creates
+///    a new `Worker` with the given ID and control structure, starting
+///    a new thread that will process tasks.
 struct Worker {
     id: usize,
+    core: Option<usize>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Worker {
     /// Creates a new worker thread that continuously processes tasks from a shared queue.
     ///
-    /// This method spawns a new thread, which runs in an infinite loop, processing tasks as they arrive in the queue.
-    /// The worker thread waits for tasks to be available and processes them as long as the thread pool is active. 
-    /// When there are no tasks or when the thread pool is deactivated, the worker will exit.
+    /// This method spawns a new thread, which runs in an infinite loop,
+    /// processing tasks as they arrive in the queue.
+    /// The worker thread waits for tasks to be available and processes
+    /// them as long as the thread pool is active.
+    /// When there are no tasks or when the thread pool is deactivated,
+    /// the worker will exit.
     ///
-    /// The worker interacts with the `ThreadPoolControlers` to manage task synchronization and coordination.
-    /// Tasks are taken from the `queue` under a lock, and the worker waits on a condition variable when the queue is empty.
-    /// The worker will continue to process tasks as long as the pool is active and the queue has tasks to process.
+    /// The worker interacts with the `ThreadPoolControlers` to manage task
+    /// synchronization and coordination.
+    /// Tasks are taken from the `queue` under a lock, and the worker waits
+    /// on a condition variable when the queue is empty.
+    /// The worker will continue to process tasks as long as the pool is
+    /// active and the queue has tasks to process.
     ///
-    /// The worker's thread will notify the controler when all tasks have been executed.
+    /// The worker's thread will notify the controler when all tasks have
+    /// been executed.
     ///
     /// # Parameters
     /// - `id`: A unique identifier for the worker.
-    /// - `controler`: An `Arc` containing the control structure for the thread pool, which handles synchronization and task management.
+    /// - `controler`: An `Arc` containing the control structure for the
+    ///    thread pool, which handles synchronization and task management.
     ///
     /// # Returns
     /// A new `Worker` instance with a spawned thread responsible for executing tasks.
     fn new(id: usize, controler: Arc<ThreadPoolControlers>) -> Self {
         println!("Creating Worker: {}", id);
 
+        let thread = std::thread::spawn(move || {Worker::thread_body(id, controler)});
+
+        Self { id, core: None, thread: Some(thread) }
+    }
+
+    fn new_with_affinity(
+        id: usize,
+        core: usize,
+        controler: Arc<ThreadPoolControlers>) -> Self {
+        println!("Creating Worker: {} with affinity to core: {}", id, core);
+
         let thread = std::thread::spawn(move || {
 
-            println!("Worker {} Running", id);
-            'outter: loop {
+            // Set affinity within the thread itself
+            let mut cpu_set = nix::sched::CpuSet::new();
+            cpu_set.set(core).unwrap(); // Pin to CPU 1
 
-                loop {
-                    // The task needs to be taken independently of the
-                    // match, because when inlined in the match it
-                    // looks like the match holds the lock.
-                    let task = {
-                        let mut lock = controler.queue.lock().unwrap();
+            // Use current thread's PID
+            let tid = nix::unistd::gettid();
+            nix::sched::sched_setaffinity(tid, &cpu_set).unwrap();
 
-                        // The thread will be here in the condition
-                        // variable until someone notifies that there
-                        // is some work to do or sets active to false.
-                        while lock.is_empty() && controler.active.load(Ordering::Relaxed) {
-                            lock = controler.cv.wait(lock).unwrap();
-                        };
-
-                        if lock.is_empty() {
-                            break 'outter
-                        }
-
-                        // Update the atomic, this trick is to avoid
-                        // taking the lock on every task finalization
-                        // to notify taskwait.
-                        controler.running.fetch_add(1, Ordering::Relaxed);
-
-                        // We can pop_front even in empty queues.
-                        // When the queue is empty we are here because
-                        // active was set to false and we want to
-                        // exit. However, we don't do that check here
-                        // to avoid holding the lock for longer.
-                        lock.pop_front()
-                    };
-
-                    match task {
-                        Some(task) => {
-                            println!(" -> Worker {} got task {}", id, task.id);
-                            task.execute();
-
-                            // When all the tasks are executed in the
-                            // thread pool, we notify in case there is a
-                            // taskwait blocking anything.
-                            if controler.running.fetch_sub(1, Ordering::Relaxed) == 1 {
-                                let _lock = controler.queue.lock().unwrap();
-                                controler.cv.notify_all();
-                            }
-                        },
-                        None => { break 'outter } // Exiting worker when no tasks are left
-                    }
-                }
-            }
-            println!("Worker {} Done", id);
+            Worker::thread_body(id, controler)
         });
 
-        Self { id, thread: Some(thread) }
+        Self { id, core: Some(core), thread: Some(thread) }
+    }
+
+
+    fn thread_body(id: usize, controler: Arc<ThreadPoolControlers>)
+    {
+        println!("Worker {} Running", id);
+        'outter: loop {
+
+            loop {
+                // The task needs to be taken independently of the
+                // match, because when inlined in the match it
+                // looks like the match holds the lock.
+                let task = {
+                    let mut lock = controler.queue.lock().unwrap();
+
+                    // The thread will be here in the condition
+                    // variable until someone notifies that there
+                    // is some work to do or sets active to false.
+                    while lock.is_empty() && controler.active.load(Ordering::Relaxed) {
+                        lock = controler.cv.wait(lock).unwrap();
+                    };
+
+                    if lock.is_empty() {
+                        break 'outter
+                    }
+
+                    // Update the atomic, this trick is to avoid
+                    // taking the lock on every task finalization
+                    // to notify taskwait.
+                    controler.running.fetch_add(1, Ordering::Relaxed);
+
+                    // We can pop_front even in empty queues.
+                    // When the queue is empty we are here because
+                    // active was set to false and we want to
+                    // exit. However, we don't do that check here
+                    // to avoid holding the lock for longer.
+                    lock.pop_front()
+                };
+
+                match task {
+                    Some(task) => {
+                        println!(" -> Worker {} got task {}", id, task.id);
+                        task.execute();
+
+                        // When all the tasks are executed in the
+                        // thread pool, we notify in case there is a
+                        // taskwait blocking anything.
+                        if controler.running.fetch_sub(1, Ordering::Relaxed) == 1 {
+                            let _lock = controler.queue.lock().unwrap();
+                            controler.cv.notify_all();
+                        }
+                    },
+                    None => { break 'outter } // Exiting worker when no tasks are left
+                }
+            }
+        }
+        println!("Worker {} Done", id);
     }
 }
 
@@ -182,23 +220,50 @@ struct ThreadPoolControlers {
 
 /// A ThreadPool that manages a collection of worker threads.
 ///
-/// This struct is used to execute tasks concurrently using a fixed number of threads.
+/// This struct is used to execute tasks concurrently using a fixed number
+///  of threads.
 /// The pool is capable of submitting tasks, executing them asynchronously, and 
-/// synchronizing task execution using a scope. It also provides functionality to 
-/// wait for tasks to finish.
+/// synchronizing task execution using a scope. It also provides functionality
+/// to wait for tasks to finish.
 ///
 /// # Methods
 ///
-/// - `new(size: usize)`: Creates a new `ThreadPool` with a specified number of worker threads.
-/// - `new_default()`: Creates a new `ThreadPool` with a number of threads based on the available parallelism.
+/// - `new(size: usize)`: Creates a new `ThreadPool` with a specified number
+///    of worker threads.
+/// - `new_default()`: Creates a new `ThreadPool` with a number of threads
+///    based on the available parallelism.
 /// - `submit(job: Box<dyn FnOnce() + Send>)`: Submits a task to the pool.
 /// - `execute<F>(f: F)`: Executes a closure by submitting it to the pool.
-/// - `scope<'scope, F>(fout: F)`: Executes a scope, ensuring tasks in the scope are completed before exiting.
+/// - `scope<'scope, F>(fout: F)`: Executes a scope, ensuring tasks in the
+///    scope are completed before exiting.
 /// - `taskwait()`: Waits for all tasks in the queue to finish execution.
 pub struct ThreadPool {
     workers: Vec<Worker>,
     controler: Arc<ThreadPoolControlers>,
 }
+
+fn get_cores() -> Vec<usize>
+{
+    let pid = nix::unistd::Pid::this();
+    let cpu_set: nix::sched::CpuSet = nix::sched::sched_getaffinity(pid).unwrap();
+
+    (0..nix::sched::CpuSet::count())
+        .filter_map(|i| {
+            match cpu_set.is_set(i) {
+                Ok(true) => Some(i),
+                _ => None, // Skip CPUs that are not set or errors
+            }
+        }).collect()
+}
+
+#[cfg(test)]
+#[test]
+fn test_get_cores()
+{
+    let cores = get_cores();
+    println!("Cores: {:?}", cores);
+}
+
 
 impl ThreadPool {
     /// Creates a new `ThreadPool` with a fixed number of threads.
@@ -227,16 +292,36 @@ impl ThreadPool {
         Self { workers, controler }
     }
 
-    /// Creates a new `ThreadPool` with the default number of threads based on system parallelism.
-    pub fn new_default() -> Self {
-        let n_threads = std::thread::available_parallelism().unwrap().get();
-        Self::new(n_threads)
+    /// Creates a new `ThreadPool` with the default number of threads
+    /// based on system parallelism.
+    pub fn new_with_affinity() -> Self {
+
+        let cores = get_cores();
+
+        assert!(cores.len() > 0);
+
+        let controler = Arc::new(
+            ThreadPoolControlers {
+                queue: Mutex::new(VecDeque::<Task>::new()),
+                running: AtomicUsize::new(0),
+                active: AtomicBool::new(true),
+                cv: Condvar::new(),
+            }
+        );
+
+        let workers = cores.iter()
+            .enumerate()
+            .map(|(i, &core)| Worker::new_with_affinity(i, core, Arc::clone(&controler)))
+            .collect();
+
+        Self { workers, controler }
     }
 
     /// Submits a task to the pool to be executed by a worker thread.
     ///
     /// # Arguments
-    /// - `job`: A boxed closure that implements `FnOnce() + Send` to be executed.
+    /// - `job`: A boxed closure that implements `FnOnce() + Send` to
+    ///    be executed.
     fn submit(&self, job: Box<dyn FnOnce() + Send>) {
         let mut guard = self.controler.queue.lock().unwrap();
         guard.push_back(Task::new(job));
@@ -250,7 +335,8 @@ impl ThreadPool {
     /// Executes a task by submitting it to the pool.
     ///
     /// # Arguments
-    /// - `f`: A closure implementing `FnOnce() + Send` to be executed by the pool.
+    /// - `f`: A closure implementing `FnOnce() + Send` to be executed
+    ///   by the pool.
     pub fn execute<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
@@ -261,7 +347,8 @@ impl ThreadPool {
     /// Executes a closure within a scope, ensuring all tasks in the scope are completed.
     ///
     /// # Arguments
-    /// - `f`: A closure that accepts a `PoolScopeData` reference and performs work within the scope.
+    /// - `f`: A closure that accepts a `PoolScopeData` reference and performs
+    ///   work within the scope.
     pub fn scope<'scope, F>(&'scope self, f: F)
     where
       F: FnOnce(&PoolScopeData<'scope>),
@@ -367,13 +454,13 @@ impl<'a> Drop for PoolScopeData<'a>
 
 
 #[cfg(test)]
-mod matrix_borrow {
+mod thread_pool {
 
     use super::*;
     use std::time::Duration;
 
     #[test]
-    fn pool_test()
+    fn execute()
     {
         let pool = ThreadPool::new(4);
 
@@ -385,7 +472,23 @@ mod matrix_borrow {
     }
 
     #[test]
-    fn pool_taskwait_fast()
+    fn execute_affinity()
+    {
+        let pool = ThreadPool::new_with_affinity();
+
+        for i in 0..16 {
+            pool.execute(move || {
+                println!("\tTask {} is running in {}.",
+                    i, nix::sched::sched_getcpu().unwrap()
+                );
+            });
+        }
+    }
+
+
+
+    #[test]
+    fn taskwait_fast()
     {
         let pool = ThreadPool::new(4);
 
@@ -407,7 +510,7 @@ mod matrix_borrow {
     }
 
     #[test]
-    fn pool_taskwait_timer()
+    fn taskwait_timer()
     {
         let pool = ThreadPool::new(4);
 
@@ -432,7 +535,7 @@ mod matrix_borrow {
     }
 
     #[test]
-    fn pool_scope_fast()
+    fn scope_fast()
     {
         let pool = ThreadPool::new(4);
 
@@ -448,7 +551,7 @@ mod matrix_borrow {
     }
 
     #[test]
-    fn pool_scope_timer()
+    fn scope_timer()
     {
         let pool = ThreadPool::new(4);
 
@@ -463,7 +566,7 @@ mod matrix_borrow {
     }
 
     #[test]
-    fn pool_scope_taskwait()
+    fn scope_taskwait()
     {
         let pool = ThreadPool::new(4);
 

@@ -24,3 +24,6 @@ path = "src/server.rs"
 name = "client"
 path = "src/client.rs"
 
+[profile.release]
+debug = true
+

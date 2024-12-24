@@ -76,7 +76,6 @@ impl Server {
                 MatrixBorrow::<f64>::from_buffer(shared_buffer.payload())
             };
 
-
             let transpose: Option<Matrix::<f64>> = {
                 let __guard = stats::TimeGuard::new(
                     format!("Transpose_{}X{}", matrix.rows(), matrix.cols()).as_str()
@@ -84,12 +83,12 @@ impl Server {
                 matrix.transpose()
             };
 
-            let _ctranspose = unsafe {
-                let cmatrix = bridge::from_buffer(shared_buffer.payload() as *mut u8);
+            // let _ctranspose = unsafe {
+            //     let cmatrix = bridge::from_buffer(shared_buffer.payload() as *mut u8);
 
-                let __guard = stats::TimeGuard::new("CTranspose");
-                cmatrix.transpose()
-            };
+            //     let __guard = stats::TimeGuard::new("CTranspose");
+            //     cmatrix.transpose()
+            // };
 
 
             { // Write the result back into shared memory

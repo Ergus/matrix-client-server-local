@@ -1,15 +1,37 @@
 # Readme
 
+This was a 4 days code challenge I have extended for fun and to test
+some rust features and patterns.
+
+## Requirements:
+
+1. Server client architecture
+2. Running on the same linux host
+3. No external crates except `rand` and `nix`
+4. Optimize for throughput including parallelism.
+5. Matrices dimensions are powers of two up to 16.
+
+The code includes different versions in **different branches**.  The
+**cpp** branch has a matrix api version implemented in C++ (with some C
+tricks to beat rust performance)
+
 ## Project parts
 
-The project contains 4 main parts
+The project contains 5 main parts
 
-1. Server-Client infrastructure (server_lib.rs)
-2. Communication infrastructure (shared_buffer.rs)
-3. Matrix class (matrix.rs)
-4. Server and client programs (server.rs, client.rs)
+1. Server-Client infrastructure ([server_lib](src/server_lib.rs))
+2. Communication infrastructure ([shared_buffer](src/shared_buffer.rs))
+3. Matrix class ([matrix](src/matrix.rs))
+4. Thread pool to avoid over-suscriptions and fork-join ([thread_pool](src/thread\_pool.rs))
+5. Server and client programs ([server](src/server.rs), [client](src/client.rs))
 
-There are not sub-projects or anything like that in order to make thing simpler.
+
+Extra:
+
+C++ matrix class ([matrix.h](cpp/matrix.hpp)) (Requires extra
+dependency to connect with rust, so that code is disabled)
+
+There are not sub-projects in order to make thing simpler.
 
 ## Execution
 
@@ -18,7 +40,7 @@ The execution is pretty simple.
 1. Open a terminal and start the server: `cargo run -r --bin server`
 2. Open another terminal and start a client: `cargo run -r --bin client 14 14 3 5`
 
-Remember that the command line arguments are:
+The command line arguments are:
 
 - m: rows = $2^m$
 
@@ -37,19 +59,19 @@ You can start more than one client concurrently on different terminals.
 The Matrix class includes a trait to enforce that only numeric 64 bits
 types can be used.
 
-The class include 4 transposition algorithms that work out of place
-generating a new transposed matrix.
+The class include 5 transposition algorithms that work generating a
+transposed matrix with different methods.
 
 1. **transpose_small_rectangle**: The dummy transposition algorithm
    iterating rows and columns. The Server uses it for small matrices.
-
+   
 2. **transpose_big**: Block based transposition algorithm sequentially.
    This version uses a temporal small squared matrix to perform
    inplace transposition. This version is at least ~3x faster than the
    previous one because reads and writes the memory in cache friendly
    order. But also because the unfriendly transpose operations are
    executed in small blocks that fit in cache lines.
-
+   
 3. **transpose_parallel_static**: Derived form previous version, but
    adds multi-threading. The total number of blocks/thread is
    precomputed assigned from the beginning.
@@ -58,7 +80,7 @@ generating a new transposed matrix.
    
    This algorithm may perform better in traditional hardware where all
    the cores have the same speed
-
+   
 4. **transpose_parallel_dynamic**: Performs the work distribution
    dynamically. The threads behave like ``workers'' that ask for work
    and when finish ask for more until there is not anything else to do.
@@ -68,22 +90,28 @@ generating a new transposed matrix.
    
    This algorithm may perform better in modern hardware with high
    performance and energy efficient cores.
+   
+5. **transpose_parallel_square_inplace**: Perform a dynamic transpose
+   by block couples inplace for big squared matrices with reduced
+   auxiliar space. This out performs by 2x the other parallel
+   algorithms, but only applies to squared matrices.
 
-The matrix class also include:
+The matrix class also includes:
 
 - Infrastructure to serialize-deserialize memory buffers into matrices
   efficiently. (with the unsafe ptr::copy_nonoverlapping)
+  
+- Infrastructure to extract and insert sub-blocks in parallel (with
+  unsafe optimizations to bypass some Rust constrains)
+  
+- Some heuristic to select correct block sizes (to fit in the L1 cache)
+  
+- Some heuristic to select correct algorithm based on matrix
+  dimension.
 
-- Infrastructure to extract and insert sub-blocks (with unsafe optimizations)
-
-- A some heuristic to select correct block sizes
-
-- A some heuristic to select correct algorithm based on matrix dimension.
-
-The parallel function creates a maximum number of threads based on
-system cores. While this is a common approach maybe a smarter
-thread-pool could be implemented in order to avoid fork-join overhead
-and over-subscription when the server has many clients.
+The parallel functions implement a fork-join approach or use the made
+in home thread-pool (as I cannot use external dependencies, but
+functionally equivalent to the ThreadPool crate).
 
 ### Server-Client
 
@@ -124,13 +152,13 @@ parallel. This was not requires, but saves testing time.
 
 ### Shared buffer
 
-The shared buffer is a shared memory wrapper that performs the io
+The shared buffer is a shared memory wrapper that performs the IO
 operation described above and ensures the correct cleanup.
 
 I chose shared memory because it is the most efficient IPC for large
 data chunks and reduces the system calls and kernel latency. As the
 buffers are created within the ``worker threads'' the whole
-communication is lock free and there is not bottle neck when the
+communication is **lock free** and there is not bottle neck when the
 server has multiple clients connected. Every thread has a private
 buffer and it is released when the client disconnects.
 
@@ -164,70 +192,20 @@ server given by the OS.
    Slice to access buffered data. This is a new optimization to avoid
    one of the copies from shared memory to local.
    
-5. The `to_buffer` method now includes an heuristic to parallelize IO
-   for big matrices. There is a new function `to_buffer_parallel` that
+5. The `to_buffer` method includes an heuristic to parallelize IO for
+   big matrices. There is a new function `to_buffer_parallel` that
    Implements a fixed data IO operation in parallel.
    
-6. Now the client pre-computes also the transposes in order to stress
-   more the server, but keep checking correctness.
-   
-## Known issues
+6. The client pre-computes also the transposes in order to stress more
+   the server, but keep checking correctness.
 
-1. The number of threads in the parallel transposition may produce
-   over-subscription when there are many clients connected.
-   
-   The right approach involves using a thread pool and to deliver
-   tasks.
-   
-   A workaround if this becomes an issue could be to take a lock in
-   the `parallel_transpose_` functions just before
-   `std::thread::scope`, in order to assert that only one
-   ``computation'' is creating threads at the time, but not blocking
-   other operations like copy from/to memory.
-   
-2. The stats are collected by thread-client not globally because I
-   thing it is more useful in that way.
-   
-3. This doesn't have a robust error handling on the server or client
-   to manage peer disconnections.
-   
-4. The synchronization method is very primitive. For more messages we
-   can just change the bool flag with an integer value and perform
-   different actions for every value. This can be simply implemented,
-   but I think it is not the main interest for the assignment.
-   
-5. There are unit tests only in the Matrix API. Without external tools
-   is a bit complicated to test server-client apis. And it doesn't
-   worth reinventing the well
-
-I spend about 2.5 days.
-1 Thursday: made the parts until work,
-1/2 Friday: Optimization and parallelization,
-1 Saturday: Readme, testing and optimize details, improve the statistics and outputs
-
-
-## Update
-
-Old Code:
+Last code times:
 
 ```
-Printing Stats collected.
 Matrix Dim: 16384x16384
-CopyIn                           count: 10       avg: 331043.9   min: 321682     max: 367517
-Transpose                        count: 10       avg: 222046.8   min: 220931     max: 223968
-CopyOut                          count: 10       avg: 114759.3   min: 103039     max: 214955
-Total                            count: 10       avg: 675408.5   min: 653513     max: 811480
-Throughput (MFLOPS): net:1208.91 gross:797.00 full:397.44
-```
-
-New Code:
-
-```
-Printing Stats collected.
-Matrix Dim: 16384x16384
-CopyIn                           count: 10       avg: 0.0        min: 0          max: 0
-Transpose                        count: 10       avg: 225996.6   min: 216154     max: 303143
-CopyOut                          count: 10       avg: 75546.5    min: 74087      max: 78009
-Total                            count: 10       avg: 306540.8   min: 294801     max: 385054
-Throughput (MFLOPS): net:1187.79 gross:890.21 full:875.69
+CopyOut                 	 count: 10       avg: 0.0        min: 0          max: 0          sum: 0
+Transpose               	 count: 10       avg: 113895.3   min: 102280     max: 216675     sum: 1138953
+CopyIn                  	 count: 10       avg: 0.0        min: 0          max: 0          sum: 0
+Total                   	 count: 10       avg: 113902.2   min: 102287     max: 216685     sum: 1139022
+Throughput (MFLOPS): net:2356.86 gross:2356.86 full:2356.72
 ```

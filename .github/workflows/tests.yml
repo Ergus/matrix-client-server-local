@@ -36,7 +36,7 @@ jobs:
           toolchain: stable
 
       - name: Run server
-        run: cargo run -r --bin server & sleep 2
+        run: cargo run -r --bin server > server.log & sleep 2
 
       - name: Run client
         run: cargo run -r --bin client 10 10 4 5
@@ -44,6 +44,10 @@ jobs:
       - name: Kill Server (Important!)
         if: always() # Ensure this runs even if previous steps fail
         run: pkill server # Or use a more specific command if needed
+
+      - name: Print server log
+        if: always()
+        run: cat server.log
 
   build:
     name: Build Release and Pack

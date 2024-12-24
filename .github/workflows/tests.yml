@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  tests:
+  unit-tests:
     name: Run Tests
     runs-on: ubuntu-latest
 
@@ -23,6 +23,27 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+  server-client-tests:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Run server
+        run: cargo run -r --bin server & sleep 2
+
+      - name: Run client
+        run: cargo run -r --bin client 10 10 4 5
+
+      - name: Kill Server (Important!)
+        if: always() # Ensure this runs even if previous steps fail
+        run: pkill server # Or use a more specific command if needed
 
   build:
     name: Build Release and Pack

@@ -171,7 +171,9 @@ impl Drop for SharedBuffer<'_> {
         unsafe {
             munmap(self.ptr, self.shm_full_size).unwrap();
         }
-        close(self.shm_fd.as_raw_fd()).unwrap();
+        if self.id == 0 {
+            close(self.shm_fd.as_raw_fd()).unwrap();
+        }
 
         if self.id == 0 {
             shm_unlink(self.shm_name.as_str()).expect("Failed to unlink shared memory");
